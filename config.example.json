@@ -1,0 +1,4 @@
+{
+  "emby": {"host": "http://192.168.1.134:8096", "api_key": ""},
+  "clips": {"dossier": "/mnt/mouflosyno/Emby-Media/Video clip"}
+}

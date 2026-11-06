@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>MouFlip</title>
+<link rel="icon" type="image/svg+xml" href="/icons/mouflip.svg"><link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png"><link rel="manifest" href="/icons/manifest.webmanifest"><meta name="theme-color" content="#121315">
+<link rel="stylesheet" href="/ui/mou-ui.css?v={{ version|urlencode }}">
+<script src="/ui/mou-ui.js?v={{ version|urlencode }}" defer></script>
+<link rel="stylesheet" href="/ui/apparence.css?v={{ version|urlencode }}">
+<script src="/ui/apparence.js?v={{ version|urlencode }}" defer></script>
+<style>
+    body { padding:16px; }
+    .container { max-width:960px; margin:0 auto; }
+    button, select, input[type=text] { font:inherit; }
+    .btn { padding:9px 16px; border:0; border-radius:4px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+    .btn:hover { background:var(--accent-hover); }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .btn.ghost { background:var(--field); color:var(--text); font-weight:500; }
+    .btn.small { padding:6px 12px; font-size:.85rem; }
+    .panel { background:var(--card); border-radius:8px; padding:16px; margin-bottom:14px; }
+    .search-row { display:flex; gap:8px; }
+    .search-row input { flex:1; min-width:0; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:10px; outline:none; }
+    .search-row input:focus { border-color:var(--accent); }
+    .cand { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid var(--line); margin-top:8px; }
+    .cand:hover { background:var(--field); }
+    .cand b { flex:1; min-width:0; } .cand small { color:var(--muted); }
+    .muted { color:var(--muted); font-size:.85rem; }
+    .pill { font-size:.72rem; padding:2px 8px; border-radius:10px; background:var(--field); color:var(--muted); white-space:nowrap; }
+    .pill.ok { background:rgba(82,181,75,.18); color:#9bdc95; }
+    .pill.warn { background:rgba(230,170,50,.18); color:#e6c068; }
+    .pill.err { background:rgba(220,80,80,.18); color:#e89090; }
+    .fiche { display:flex; gap:14px; align-items:flex-start; }
+    .fiche img { width:96px; height:96px; object-fit:cover; border-radius:8px; background:var(--field); flex:none; }
+    .fiche h2 { margin:0 0 4px; font-size:1.25rem; }
+    .bio { font-size:.85rem; color:var(--muted); margin-top:8px; max-height:4.6em; overflow:hidden; }
+    .bio.ouverte { max-height:none; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0; }
+    .toolbar select { background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:8px; }
+    .clip { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; padding:10px 4px; border-top:1px solid var(--line); }
+    .clip input[type=checkbox] { width:20px; height:20px; margin-top:2px; }
+    .clip .t { font-weight:600; word-break:break-word; }
+    .clip .chemin { grid-column:2; font-size:.74rem; color:var(--muted); word-break:break-all; }
+    .clip .fmt { grid-column:2; font-size:.85rem; }
+    .progress { background:var(--field); border-radius:6px; height:30px; position:relative; overflow:hidden; display:none; margin:8px 0; }
+    .progress.show { display:block; }
+    .progress .bar { background:var(--accent); height:100%; width:0; transition:width .4s; }
+    .progress .txt { position:absolute; inset:0; display:flex; align-items:center; padding:0 12px; font-size:.85rem; }
+    .note { padding:8px 12px; border-radius:6px; margin-top:8px; font-size:.88rem; background:var(--field); }
+    .note.err { background:rgba(220,80,80,.18); } .note.warn { background:rgba(230,170,50,.18); }
+    @media (max-width:600px) { body { padding:10px; } .search-row { flex-direction:column; } .search-row .btn { padding:12px; } input[type=text], select { font-size:16px; } .toolbar .btn { flex:1 1 45%; padding:11px; } }
+</style>
+</head>
+<body>
+<div class="container">
+    <div id="mou-header" data-app="mouflip" data-prefix="MouFl" data-rest="ip" data-version="{{ version }}" data-settings="1" data-sub="Clips vidéo K-pop pour Emby (lecture seule pour l'instant : rien n'est téléchargé ni rangé)"></div>
+
+    <div class="panel">
+        <div class="search-row"><input type="text" id="q" placeholder="Nom du groupe (ex. BLACKPINK, aespa…)" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="chercher">🔎 Chercher</button></div>
+        <div id="cands"></div>
+        <div id="msg"></div>
+    </div>
+
+    <div id="groupe" hidden></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url, opts) {
+    const r = await fetch(url, opts); let d = {};
+    try { d = await r.json(); } catch (e) { d = {error: 'Réponse illisible du serveur (code ' + r.status + ').'}; }
+    if (!r.ok && !d.error) d.error = 'Erreur ' + r.status;
+    return d;
+}
+const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+function note(text, kind) { $('msg').innerHTML = text ? `<div class="note ${kind || ''}">${esc(text)}</div>` : ''; }
+
+let G = null, F = {};   // groupe affiché, formats lus (titre -> résultat)
+
+async function chercher() {
+    const q = $('q').value.trim(); if (q.length < 2) return;
+    $('cands').innerHTML = ''; note('Recherche…');
+    const d = await api('/api/groupes/chercher?q=' + encodeURIComponent(q));
+    if (d.error) return note(d.error, 'err');
+    note('');
+    if (!(d.groupes || []).length) return note('Aucun groupe trouvé pour « ' + q + ' ».', 'warn');
+    $('cands').innerHTML = d.groupes.map(g => `<div class="cand" data-id="${esc(g.mbid)}"><b>${esc(g.nom)} <small>${esc([g.type, g.pays, g.debut, g.precision].filter(Boolean).join(' · '))}</small></b><span class="pill">${g.score} %</span></div>`).join('');
+    document.querySelectorAll('.cand').forEach(el => el.addEventListener('click', () => ouvrir(el.dataset.id)));
+}
+async function ouvrir(mbid) {
+    note('Lecture de la fiche et de la liste des clips (jusqu’à une minute)…');
+    $('groupe').hidden = true;
+    const d = await api('/api/groupe/' + mbid);
+    if (d.error) return note(d.error, 'err');
+    note(''); $('cands').innerHTML = ''; G = d; F = {}; dessiner();
+}
+function filtreClips() {
+    const t = $('fTypes') ? $('fTypes').value : 'clip', d = $('fDeja') ? $('fDeja').value : 'tous';
+    return G.clips.filter(c => (t === 'tous' || c.type === t) && (d === 'tous' || (d === 'manquants' ? !c.deja : c.deja)));
+}
+function formatTxt(r) {
+    if (!r) return '';
+    if (r.etat === 'erreur') return `<span class="pill err">⚠️ ${esc(r.erreur)}</span>`;
+    if (r.etat === 'introuvable') return `<span class="pill warn">Vidéo officielle introuvable sur YouTube</span>`;
+    const f = r.format, v = r.video;
+    if (!f) return `<span class="pill warn">Aucun format vidéo lisible</span>`;
+    return `<span class="pill ok">${esc(f.resolution)} · ${esc(f.codec)} · ${f.debit_kbps} kb/s${f.fps ? ' · ' + f.fps + ' i/s' : ''}${f.premium ? ' · ⭐ Premium' : ''}</span> <span class="muted">${esc(v.chaine || '')} · « ${esc(v.titre)} »</span>`;
+}
+function dessiner() {
+    const f = G.fiche, img = G.images.vignette || '';
+    const liste = filtreClips();
+    $('groupe').hidden = false;
+    $('groupe').innerHTML = `
+    <div class="panel">
+        <div class="fiche">${img ? `<img src="${esc(img)}" alt="" referrerpolicy="no-referrer">` : ''}
+            <div style="min-width:0"><h2>${esc(f.nom)}</h2>
+            <div class="muted">${esc([f.type, f.pays, f.debut ? 'depuis ' + f.debut : '', (f.genres || []).slice(0, 3).join(', ')].filter(Boolean).join(' · '))}</div>
+            <div class="muted" style="margin-top:6px">${G.dossier_groupe ? `📁 Dossier existant : <b>${esc(G.dossier_groupe)}</b> (${G.nb_locaux} vidéo(s))` : `📁 Pas encore de dossier : <b>${esc(G.racine)}/${esc(f.nom)}</b> serait créé (rien ne l'est maintenant)`}</div>
+            ${G.racine_ok ? '' : `<div class="note err">Le dossier des clips « ${esc(G.racine)} » est introuvable : le partage est-il monté ? (⚙️ Réglages → Dossiers)</div>`}
+            </div></div>
+        ${G.biographie ? `<div class="bio" id="bio">${esc(G.biographie)}</div><a href="#" id="bioPlus" class="muted">Lire la suite</a>` : ''}
+        ${(G.erreurs || []).map(e => `<div class="note warn">⚠️ ${esc(e)}</div>`).join('')}
+    </div>
+    <div class="panel">
+        <h3 style="margin:0 0 4px">Clips (${liste.length} affichés sur ${G.clips.length})</h3>
+        <div class="muted">Liste de MusicBrainz : elle peut être incomplète ou contenir des vidéos qui ne sont pas des clips ; ce sera affiné.</div>
+        <div class="toolbar">
+            <select id="fTypes"><option value="clip">Vrais clips</option><option value="autre">Autres vidéos (concerts, coulisses…)</option><option value="tous">Tout</option></select>
+            <select id="fDeja"><option value="tous">Déjà là ou non</option><option value="manquants">Seulement ceux que je n’ai pas</option><option value="deja">Seulement ceux que j’ai</option></select>
+            <button class="btn ghost small" id="toutCocher">Tout cocher</button><button class="btn ghost small" id="toutDecocher">Tout décocher</button>
+        </div>
+        <div class="toolbar"><button class="btn" id="lireFormats">📊 Voir le meilleur format des clips cochés</button></div>
+        <div class="progress" id="prog"><div class="bar" id="progBar"></div><div class="txt" id="progTxt"></div></div>
+        <div id="clips">${liste.map((c, i) => ligne(c, i)).join('') || '<div class="muted" style="padding:14px">Aucun clip dans cette vue.</div>'}</div>
+    </div>`;
+    $('fTypes').value = dessiner.t || 'clip'; $('fDeja').value = dessiner.d || 'tous';
+    $('fTypes').onchange = $('fDeja').onchange = () => { dessiner.t = $('fTypes').value; dessiner.d = $('fDeja').value; dessiner(); };
+    $('toutCocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = true);
+    $('toutDecocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = false);
+    $('lireFormats').onclick = lireFormats;
+    if ($('bioPlus')) $('bioPlus').onclick = e => { e.preventDefault(); $('bio').classList.toggle('ouverte'); };
+}
+function ligne(c, i) {
+    return `<div class="clip" data-t="${esc(c.titre)}"><input type="checkbox" ${c.deja ? '' : 'checked'} aria-label="Choisir ce clip">
+        <div><span class="t">${esc(c.titre)}</span> <span class="muted">${esc(c.album)}${c.annee ? ' · ' + esc(c.annee) : ''}</span>
+        ${c.deja ? '<span class="pill ok">✅ déjà dans la médiathèque</span>' : '<span class="pill">⬇️ à prendre</span>'}</div>
+        <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
+        <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div></div>`;
+}
+async function lireFormats() {
+    const titres = [...document.querySelectorAll('.clip')].filter(el => el.querySelector('input').checked).map(el => el.dataset.t);
+    if (!titres.length) return note('Coche au moins un clip.', 'warn');
+    if (titres.length > 60) titres.length = 60;
+    $('lireFormats').disabled = true; note('');
+    const d = await post('/api/formats', {groupe: G.fiche.nom, titres});
+    if (d.error) { $('lireFormats').disabled = false; return note(d.error, 'err'); }
+    $('prog').classList.add('show');
+    const boucle = async () => {
+        const e = await api('/api/formats/etat?job=' + d.job);
+        if (e.error) { $('lireFormats').disabled = false; return note(e.error, 'err'); }
+        $('progBar').style.width = (100 * e.fait / e.total) + '%'; $('progTxt').textContent = `Lecture des formats… ${e.fait} / ${e.total}`;
+        Object.assign(F, e.resultats);
+        document.querySelectorAll('.clip').forEach((el, i) => { const r = F[el.dataset.t]; if (r) $('fmt' + i).innerHTML = formatTxt(r); });
+        if (!e.fini) return setTimeout(boucle, 2000);
+        $('progTxt').textContent = `Terminé : ${e.total} clip(s) lus. Rien n’a été téléchargé.`; $('lireFormats').disabled = false;
+    };
+    boucle();
+}
+$('chercher').addEventListener('click', chercher);
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') chercher(); });
+</script>
+</body>
+</html>
