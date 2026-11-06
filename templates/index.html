@@ -176,6 +176,7 @@ async function voir(i, bouton) {
 function montrer(i, titre, id) {
     const zone = $('voir' + i), c = AP[titre], cur = c.find(x => x.id === id) || c[0];
     zone.innerHTML = `<div class="lecteur" data-id="${esc(cur.id)}"><img src="https://i.ytimg.com/vi/${esc(cur.id)}/hqdefault.jpg" alt="" referrerpolicy="no-referrer"><div class="play">▶</div></div>
+        ${cur.officielle ? '<span class="pill ok">✅ chaîne officielle</span>' : '<span class="pill warn">⚠️ chaîne non reconnue comme officielle : vérifie</span>'}
         <div class="muted" style="margin:6px 0">${esc(cur.channel || '')} · « ${esc(cur.title)} » ${cur.duration ? '· ' + dur(cur.duration) : ''} · <a href="${esc(cur.url)}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>
         ${c.length > 1 ? '<div class="muted">Autres vidéos possibles :</div><div class="alt">' + c.map(x => `<button data-id="${esc(x.id)}" class="${x.id === cur.id ? 'cur' : ''}">${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}</button>`).join('') + '</div>' : ''}
         <button class="btn small" data-choisir="1">${V[titre] === cur.id ? '✅ Vidéo choisie' : '✅ C’est cette vidéo'}</button>`;

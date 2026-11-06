@@ -235,6 +235,33 @@ class RoutesTest(unittest.TestCase):
 
 
 
+class OfficielSeulementTest(unittest.TestCase):
+    def test_lives_emissions_et_coulisses_jamais_proposes(self):
+        entrees = [
+            {"id": "ok1", "title": "aespa 에스파 'Supernova' MV", "channel": "SMTOWN", "duration": 194},
+            {"id": "tv1", "title": "'최초 공개' aespa - Supernova #엠카운트다운 EP.843", "channel": "Mnet K-POP", "duration": 198},
+            {"id": "ft1", "title": "aespa - Supernova / THE FIRST TAKE", "channel": "THE FIRST TAKE", "duration": 271},
+            {"id": "lv1", "title": "aespa - Supernova (Live at Coachella)", "channel": "aespa", "duration": 240},
+            {"id": "cg1", "title": "aespa 'Supernova' Camerawork Guide", "channel": "aespa", "duration": 255},
+            {"id": "dp1", "title": "aespa 'Supernova' Dance Practice", "channel": "SMTOWN", "duration": 200},
+            {"id": "ly1", "title": "aespa 'Supernova' Lyrics", "channel": "Jaeguchi", "duration": 179},
+            {"id": "co1", "title": "aespa - Supernova | Concert 2024 Tour", "channel": "SMTOWN", "duration": 210}]
+        c = formats.candidats("aespa", "Supernova", _faux_youtube(entrees, []))
+        self.assertEqual([x["id"] for x in c], ["ok1"])
+
+    def test_republications_de_fans_cachees_quand_la_chaine_officielle_existe(self):
+        entrees = [{"id": "of", "title": "aespa 'Savage' MV", "channel": "SMTOWN", "duration": 259},
+                   {"id": "fan", "title": "[4K 60FPS] aespa 'Savage' MV | REQUEST", "channel": "Black Hive Studio", "duration": 259}]
+        c = formats.candidats("aespa", "Savage", _faux_youtube(entrees, []))
+        self.assertEqual([(x["id"], x["officielle"]) for x in c], [("of", True)])
+        sans = formats.candidats("aespa", "Savage", _faux_youtube(entrees[1:], []))
+        self.assertEqual([(x["id"], x["officielle"]) for x in sans], [("fan", False)])           # rien d'officiel : montré mais signalé
+
+    def test_un_titre_qui_contient_un_mot_interdit_reste_possible(self):
+        entrees = [{"id": "lw", "title": "Red Velvet 'Live Wire' MV", "channel": "SMTOWN", "duration": 200}]
+        self.assertEqual([x["id"] for x in formats.candidats("Red Velvet", "Live Wire", _faux_youtube(entrees, []))], ["lw"])
+
+
 class ApercuTest(unittest.TestCase):
     def test_candidats_pour_regarder_et_choisir(self):
         extraire = _faux_youtube(FormatsTest.ENTREES, [])

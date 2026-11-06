@@ -9,12 +9,22 @@ from src.noms import normaliser
 
 logger = logging.getLogger(__name__)
 
-# Ce qui n'est PAS le clip : répétitions de danse, extraits, paroles, concerts, réactions…
-_PAS_LE_CLIP = re.compile(r"\b(dance\s*practice|choreography|teaser|trailer|lyrics?|reaction|live|stage|performance|behind|making|"
-                          r"cover|remix|instrumental|audio|karaoke|fancam|shorts?|highlight|medley|preview|snippet|mv\s*reaction)\b", re.I)
+# Ce qui n'est JAMAIS le clip officiel : répétitions de danse, extraits, paroles, concerts, lives, émissions de télévision, coulisses, réactions…
+# (un seul de ces mots dans le titre suffit à écarter la vidéo)
+_PAS_LE_CLIP = re.compile(r"\b(dance\s*practice|choreograph\w*|teaser|trailer|lyrics?|reaction|live|stage|stages|performance|behind|making|"
+                          r"cover|remix|instrumental|audio|karaoke|fancam|shorts?|highlight|medley|preview|snippet|concert|tour|festival|awards?|"
+                          r"countdown|inkigayo|music\s*bank|show\s*champion|the\s*show|first\s*take|kcon|interview|special|episode|ep\.?\s*\d+|"
+                          r"jacket|photoshoot|camerawork|guide|sped\s*up|slowed|mashup|version|ver\.|recap|vlog|fan\s*made|mirrored|dance\s*break)\b|"
+                          r"[#＃]|\u2022", re.I)
 _BON_SIGNE = re.compile(r"\b(m\s*/\s*v|mv|music\s*video|official\s*video|official\s*mv)\b", re.I)
+# Chaînes de télévision, d'émissions et de fans : jamais le clip officiel
+_CHAINES_PAS_OFFICIELLES = re.compile(r"\b(mnet|kbs|sbs|mbc|m2|studio\s*choom|dingo|the\s*first\s*take|kcon|arirang|jtbc|tving|vevo\s*live|fan|lyrics?|"
+                                      r"reaction|react|dance|cover)\b", re.I)
 _LABELS = ("smtown", "hybe", "yg entertainment", "blackpink", "jyp", "1thek", "starship", "cube", "kq", "fnc", "pledis", "ador", "kakao",
-           "dreamcatcher", "wm entertainment", "woollim", "mnet", "stone music", "genie", "ist entertainment", "source music", "belift")
+           "dreamcatcher", "wm entertainment", "woollim", "stone music", "genie", "ist entertainment", "source music", "belift")
+
+
+SEUIL_OFFICIEL = 90                                        # titre + « MV » + chaîne du label ou du groupe
 
 
 def _options(plat: bool = False) -> dict:
@@ -34,12 +44,17 @@ def _note(c: dict, groupe: str, titre: str) -> int:
         note += 40
     else:
         return -100                                          # le titre du clip n'apparaît pas : autre chose
+    # le titre cherché peut lui-même contenir un de ces mots (« Live Wire ») : on l'ôte avant de juger la vidéo
+    reste = re.sub(re.escape(titre), " ", t, flags=re.I)
+    if _PAS_LE_CLIP.search(reste):
+        return -100                                          # live, concert, émission, coulisses… : jamais proposé
+    chaine_brute = (c.get("channel") or c.get("uploader") or "")
+    if _CHAINES_PAS_OFFICIELLES.search(chaine_brute) and not any(l in chaine_brute.lower() for l in _LABELS):
+        return -100
     if ng and ng.split()[0] in nt:
         note += 8
     if _BON_SIGNE.search(t):
         note += 25
-    if _PAS_LE_CLIP.search(t):
-        note -= 60
     chaine = (c.get("channel") or c.get("uploader") or "").lower()
     if any(l in chaine for l in _LABELS) or (ng and ng in normaliser(chaine)):
         note += 25
@@ -85,8 +100,13 @@ def meilleur_format(infos: dict) -> dict | None:
 def candidats(groupe: str, titre: str, extraire=None, combien: int = 5) -> list[dict]:
     """Les vidéos YouTube qui pourraient être ce clip, la plus probable d'abord (pour les regarder et choisir). Lève en cas de panne de YouTube."""
     _choisi, cands = choisir_video(groupe, titre, extraire)
-    return [{k: c.get(k) for k in ("id", "title", "channel", "duration", "note")} | {"url": f"https://www.youtube.com/watch?v={c['id']}"}
-            for c in cands if c["note"] > -100][:combien]
+    bons = [c for c in cands if c["note"] > -100]
+    officielles = [c for c in bons if c["note"] >= SEUIL_OFFICIEL]
+    if officielles:                                          # une chaîne officielle existe : les re-publications de fans ne sont même pas montrées
+        bons = officielles
+    return [{k: c.get(k) for k in ("id", "title", "channel", "duration", "note")} | {"url": f"https://www.youtube.com/watch?v={c['id']}",
+                                                                                      "officielle": c["note"] >= SEUIL_OFFICIEL}
+            for c in bons][:combien]
 
 
 def analyser(groupe: str, titre: str, extraire=None, video_id: str = "") -> dict:
