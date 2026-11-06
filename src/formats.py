@@ -82,12 +82,23 @@ def meilleur_format(infos: dict) -> dict | None:
             "audio": {"codec": (a.get("acodec") or "").split(".")[0], "debit_kbps": round(a.get("abr") or a.get("tbr") or 0)} if a else None}
 
 
-def analyser(groupe: str, titre: str, extraire=None) -> dict:
-    """Résultat complet pour un clip. Ne lève jamais : une panne de YouTube est dite (« erreur »), pas confondue avec « introuvable »."""
+def candidats(groupe: str, titre: str, extraire=None, combien: int = 5) -> list[dict]:
+    """Les vidéos YouTube qui pourraient être ce clip, la plus probable d'abord (pour les regarder et choisir). Lève en cas de panne de YouTube."""
+    _choisi, cands = choisir_video(groupe, titre, extraire)
+    return [{k: c.get(k) for k in ("id", "title", "channel", "duration", "note")} | {"url": f"https://www.youtube.com/watch?v={c['id']}"}
+            for c in cands if c["note"] > -100][:combien]
+
+
+def analyser(groupe: str, titre: str, extraire=None, video_id: str = "") -> dict:
+    """Résultat complet pour un clip. Ne lève jamais : une panne de YouTube est dite (« erreur »), pas confondue avec « introuvable ».
+    `video_id` : la vidéo que tu as choisie en la regardant (sinon la plus probable)."""
     from yt_dlp import YoutubeDL
     extraire = extraire or (lambda q, o: YoutubeDL(o).extract_info(q, download=False))
     try:
-        choisi, cands = choisir_video(groupe, titre, extraire)
+        if video_id and re.fullmatch(r"[\w-]{11}", video_id):
+            choisi, cands = {"id": video_id, "title": "", "channel": "", "duration": 0, "url": f"https://www.youtube.com/watch?v={video_id}", "note": 100}, []
+        else:
+            choisi, cands = choisir_video(groupe, titre, extraire)
     except Exception as e:
         logger.warning("Recherche YouTube impossible pour « %s - %s » : %s", groupe, titre, e)
         return {"etat": "erreur", "erreur": f"YouTube ne répond pas : {str(e)[:160]}"}

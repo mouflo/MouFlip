@@ -133,9 +133,9 @@ def api_groupe(mbid):
         return jsonify({"error": f"MusicBrainz est injoignable : {e}. Réessaie dans un instant."}), 502
 
 
-def _lire_formats(job_id, groupe, titres):
+def _lire_formats(job_id, groupe, titres, videos):
     for t in titres:
-        r = formats.analyser(groupe, t)
+        r = formats.analyser(groupe, t, video_id=videos.get(t, ""))
         with _FORMATS_VERROU:
             FORMATS[job_id]["resultats"][t] = r
             FORMATS[job_id]["fait"] += 1
@@ -156,7 +156,8 @@ def api_formats():
             return jsonify({"error": "Une lecture de formats est déjà en cours : attends qu'elle finisse."}), 409
         job = uuid.uuid4().hex[:10]
         FORMATS[job] = {"total": len(titres), "fait": 0, "resultats": {}, "fini": False}
-    threading.Thread(target=_lire_formats, args=(job, groupe, titres), daemon=True).start()
+    videos = {str(k): str(v) for k, v in (b.get("videos") or {}).items() if isinstance(v, str)}
+    threading.Thread(target=_lire_formats, args=(job, groupe, titres, videos), daemon=True).start()
     return jsonify({"job": job, "total": len(titres)})
 
 
@@ -167,6 +168,29 @@ def api_formats_etat():
         if not j:
             return jsonify({"error": "Lot inconnu."}), 404
         return jsonify({"total": j["total"], "fait": j["fait"], "fini": j["fini"], "resultats": dict(j["resultats"])})
+
+
+_APERCUS = {}                      # (groupe, titre) -> (heure, candidats) : 30 min
+
+
+@app.route("/api/apercu", methods=["POST"])
+def api_apercu():
+    """Les vidéos YouTube possibles pour un clip (la plus probable d'abord), pour les REGARDER et choisir. Lecture seule."""
+    b = request.get_json(silent=True) or {}
+    groupe, titre = str(b.get("groupe", "")).strip(), str(b.get("titre", "")).strip()
+    if not groupe or not titre:
+        return jsonify({"error": "Clip inconnu."}), 400
+    cle = (groupe, titre)
+    ancien = _APERCUS.get(cle)
+    if ancien and time.time() - ancien[0] < 1800:
+        return jsonify({"candidats": ancien[1]})
+    try:
+        c = formats.candidats(groupe, titre)
+    except Exception as e:
+        logger.warning("Aperçu impossible pour « %s - %s » : %s", groupe, titre, e)
+        return jsonify({"error": f"YouTube ne répond pas : {str(e)[:160]}"}), 502
+    _APERCUS[cle] = (time.time(), c)
+    return jsonify({"candidats": c})
 
 
 def _cmd_version(cmd, *args):

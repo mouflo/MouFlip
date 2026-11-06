@@ -234,5 +234,26 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(self.c.post("/api/settings/dossier", json={"dossier": "/nexiste/pas"}).status_code, 400)
 
 
+
+class ApercuTest(unittest.TestCase):
+    def test_candidats_pour_regarder_et_choisir(self):
+        extraire = _faux_youtube(FormatsTest.ENTREES, [])
+        c = formats.candidats("BLACKPINK", "Pink Venom", extraire)
+        self.assertEqual(c[0]["id"], "bbb")
+        self.assertTrue(all(x["note"] > -100 for x in c))                      # « Autre chose » n'est pas proposé
+        self.assertTrue(c[0]["url"].endswith("bbb"))
+
+    def test_video_choisie_est_utilisee_directement(self):
+        appels = []
+        def extraire(q, o):
+            appels.append(q)
+            return {"title": "t", "channel": "c", "duration": 190, "formats": FormatsTest.FORMATS}
+        r = formats.analyser("BLACKPINK", "Pink Venom", extraire, video_id="abcdefghijk")
+        self.assertEqual(r["video"]["id"], "abcdefghijk")
+        self.assertFalse(any(str(a).startswith("ytsearch") for a in appels))   # pas de recherche : la vidéo est déjà choisie
+        r2 = formats.analyser("BLACKPINK", "Pink Venom", extraire, video_id="pas valide")
+        self.assertTrue(any(str(a).startswith("ytsearch") for a in appels))    # identifiant douteux : on cherche
+
+
 if __name__ == "__main__":
     unittest.main()
