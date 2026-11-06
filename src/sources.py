@@ -16,6 +16,9 @@ MB = "https://musicbrainz.org/ws/2"
 _verrou, _dernier = threading.Lock(), [0.0]
 
 # Vidéos qui ne sont pas des clips : coulisses, concerts, bandes-annonces, intermèdes
+# Variantes sans intérêt : remix, versions, chorégraphies, « guide de caméra »…
+_VARIANTE = re.compile(r"\b(remix(es)?|rmx|ver\.?|version|remake|track\s*video|choreograph\w*|camerawork|guide|instrumental|acoustic|"
+                       r"sped\s*up|slowed|mashup|edit|up\s*next|performance\s*video|dance\s*break)\b", re.I)
 _PAS_CLIP = re.compile(r"\b(behind|making|trailer|teaser|interview|multi\s*angles?|bridge\s*vcr|vcr|mc|ment|movie|jacket|shooting|"
                        r"live\s*(clip|performance|at|from)|concert|dance\s*practice|lyric|reaction|special\s*video|film|showcase|a-nation|festival|tour|awards?|premium)\b", re.I)
 
@@ -115,33 +118,113 @@ def _album_choisi(releases: list[dict], titre: str) -> tuple[str, str]:
     return titre, ""
 
 
-def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
-    """Les enregistrements marqués « vidéo » par MusicBrainz, dédoublonnés. « clip » = vrai clip probable ; « autre » = concert, coulisses, intermède…"""
-    bruts, offset = [], 0
-    while offset < 400:
-        d = _get(f"{MB}/recording", {"query": f"arid:{mbid} AND video:true", "fmt": "json", "limit": 100, "offset": offset}) or {}
-        lot = d.get("recordings", [])
-        bruts += lot
+def _sorties(mbid: str) -> list[dict]:
+    """Les groupes de sorties du groupe (Single / EP / Album) avec leur date, sans les remix, lives, compilations et bandes originales."""
+    sortie, offset = [], 0
+    while offset < 300:
+        d = _get(f"{MB}/release-group", {"artist": mbid, "type": "single|ep|album", "fmt": "json", "limit": 100, "offset": offset}) or {}
+        lot = d.get("release-groups", [])
+        for g in lot:
+            if g.get("secondary-types"):
+                continue
+            sortie.append({"id": g["id"], "titre": g.get("title", ""), "type": g.get("primary-type", ""), "date": g.get("first-release-date") or ""})
         offset += 100
         if offset >= d.get("count", 0) or not lot:
             break
-    vus, sortie = {}, []
-    for r in bruts:
-        titre = (r.get("title") or "").strip()
-        if not titre:
-            continue
-        sorties = r.get("releases", []) or []
-        live_seulement = bool(sorties) and all("Live" in ((x.get("release-group") or {}).get("secondary-types") or []) for x in sorties)
-        album, date_album = _album_choisi(sorties, titre)
-        clip = not (_PAS_CLIP.search(titre) or live_seulement)
-        cle = normaliser(titre) or titre                 # un même titre dans plusieurs albums (rééditions, versions JP) = un seul clip, rangé dans sa plus ancienne sortie
-        ligne = {"titre": titre, "album": album, "annee": ((r.get("first-release-date") or date_album or "")[:4]), "mbid": r.get("id", ""),
-                 "type": "clip" if clip else "autre", "duree": round((r.get("length") or 0) / 1000)}
-        if cle in vus:
-            if ligne["annee"] and (not vus[cle]["annee"] or ligne["annee"] < vus[cle]["annee"]):
-                vus[cle].update(annee=ligne["annee"])
-            continue
-        vus[cle] = ligne
-        sortie.append(ligne)
-    sortie.sort(key=lambda c: (c["type"] != "clip", c["annee"] or "9999", normaliser(c["titre"])))
+    return sortie
+
+
+def _pistes_des_albums(mbid: str) -> dict:
+    """{titre normalisé: (album, date)} : dans quel album ou EP (le plus ancien) se trouve chaque morceau. Une seule série de requêtes."""
+    out, offset = {}, 0
+    while offset < 400:
+        d = _get(f"{MB}/release", {"artist": mbid, "type": "album|ep", "status": "official", "inc": "recordings+release-groups", "fmt": "json",
+                                   "limit": 100, "offset": offset}) or {}
+        lot = d.get("releases", [])
+        for r in lot:
+            rg = r.get("release-group") or {}
+            if rg.get("secondary-types") or rg.get("primary-type") not in ("Album", "EP"):
+                continue
+            date = rg.get("first-release-date") or r.get("date") or ""
+            for m in r.get("media", []):
+                for t in m.get("tracks", []):
+                    n = normaliser(t.get("title", ""))
+                    if n and (n not in out or (date or "9999") < (out[n][1] or "9999")):
+                        out[n] = (rg.get("title") or r.get("title") or "", date)
+        offset += 100
+        if offset >= d.get("release-count", 0) or not lot:
+            break
+    return out
+
+
+def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
+    """Les clips candidats : (1) les vidéos que MusicBrainz connaît, (2) les singles et les titres-phares d'EP / d'album. Les remix, versions,
+    chorégraphies, concerts et coulisses sont écartés. « source » dit d'où vient la ligne : « video » (MusicBrainz connaît cette vidéo)
+    ou « sortie » (un single ou titre-phare : la vidéo officielle est à vérifier sur YouTube)."""
+    erreurs_pistes = None
+    try:
+        pistes = _pistes_des_albums(mbid)
+    except SourceIndisponible as e:
+        pistes, erreurs_pistes = {}, str(e)
+    sorties = _sorties(mbid)
+    singles = {normaliser(g["titre"]): g["date"] for g in sorties if g["type"] == "Single" and g["date"]}
+    candidats = {}
+
+    def _jours(a: str, b: str):
+        """Jours entre deux dates MusicBrainz (AAAA, AAAA-MM ou AAAA-MM-JJ), None si une date manque."""
+        from datetime import date
+        def d(x):
+            try:
+                p = (x + "-01-01").split("-")[:3] if len(x) == 4 else (x + "-01").split("-")[:3] if len(x) == 7 else x.split("-")[:3]
+                return date(int(p[0]), int(p[1]), int(p[2]))
+            except (ValueError, IndexError):
+                return None
+        x, y = d(a), d(b)
+        return (y - x).days if x and y else None
+
+    def ajouter(titre, album, date, source, mb_id="", duree=0):
+        n = normaliser(titre) or titre
+        if _VARIANTE.search(titre) or _PAS_CLIP.search(titre):
+            return
+        album_pistes = pistes.get(n)
+        if album_pistes:
+            # un single sorti bien avant l'album garde son propre dossier (« Black Mamba/Black Mamba ») ;
+            # un single de pré-sortie (moins de 100 jours avant l'album) va dans l'album (« Armageddon/Supernova »)
+            ecart = _jours(singles[n], album_pistes[1]) if n in singles else None
+            if n not in singles or (ecart is not None and 0 <= ecart <= 100):
+                album, date = album_pistes[0], (date or album_pistes[1])
+        annee = (date or "")[:4]
+        if n in candidats:
+            c = candidats[n]
+            if source == "video":
+                c["source"] = "video"
+            if annee and (not c["annee"] or annee < c["annee"]):
+                c["annee"] = annee
+            return
+        candidats[n] = {"titre": titre.strip(), "album": album or titre.strip(), "annee": annee, "mbid": mb_id, "type": "clip", "source": source, "duree": duree}
+
+    # (1) vidéos répertoriées par MusicBrainz
+    offset = 0
+    while offset < 400:
+        d = _get(f"{MB}/recording", {"query": f"arid:{mbid} AND video:true", "fmt": "json", "limit": 100, "offset": offset}) or {}
+        lot = d.get("recordings", [])
+        for r in lot:
+            titre = (r.get("title") or "").strip()
+            rels = r.get("releases", []) or []
+            live_seulement = bool(rels) and all("Live" in ((x.get("release-group") or {}).get("secondary-types") or []) for x in rels)
+            if not titre or live_seulement:
+                continue
+            album, date = _album_choisi(rels, titre)
+            ajouter(titre, album, r.get("first-release-date") or date, "video", r.get("id", ""), round((r.get("length") or 0) / 1000))
+        offset += 100
+        if offset >= d.get("count", 0) or not lot:
+            break
+    # (2) singles et titres-phares
+    for g in sorties:
+        if g["type"] == "Single" or normaliser(g["titre"]) in pistes:
+            ajouter(g["titre"], g["titre"] if g["type"] == "Single" else "", g["date"], "sortie")
+    sortie = sorted(candidats.values(), key=lambda c: (c["annee"] or "9999", normaliser(c["titre"])))
+    if erreurs_pistes:
+        for c in sortie:
+            c["avertissement"] = "albums non lus : " + erreurs_pistes
     return sortie

@@ -93,8 +93,33 @@ class CliposTest(unittest.TestCase):
             {"id": "4", "title": "STAY", "releases": [{"release-group": {"primary-type": "Album", "secondary-types": ["Live"], "title": "Concert"}}]}]}
         with mock.patch.object(sources, "_get", return_value=page):
             r = sources.clips_mb("x", "BLACKPINK")
-        self.assertEqual([(c["titre"], c["type"], c["album"]) for c in r],
-                         [("Pink Venom", "clip", "BORN PINK"), ("[THE SHOW] BEHIND EP.1", "autre", "[THE SHOW] BEHIND EP.1"), ("STAY", "autre", "STAY")])
+        self.assertEqual([(c["titre"], c["album"], c["source"]) for c in r], [("Pink Venom", "BORN PINK", "video")])   # coulisses et concert écartés, doublon fusionné
+
+    def test_remix_versions_et_choregraphies_ecartes(self):
+        page = {"count": 5, "recordings": [{"id": str(i), "title": t, "releases": []} for i, t in enumerate(
+            ["Girls (BRLLNT remix)", "Whiplash (English version)", "Dirty Work (choreography video)", "Savage (camerawork guide version)", "Supernova"])]}
+        with mock.patch.object(sources, "_get", return_value=page):
+            r = sources.clips_mb("x", "aespa")
+        self.assertEqual([c["titre"] for c in r], ["Supernova"])
+
+    def test_single_de_pre_sortie_va_dans_l_album_les_autres_gardent_leur_dossier(self):
+        def faux(url, params=None, max_essais=3):
+            if url.endswith("/recording"):
+                return {"count": 0, "recordings": []}
+            if url.endswith("/release-group"):
+                return {"count": 4, "release-groups": [
+                    {"id": "d", "title": "Girls", "primary-type": "EP", "first-release-date": "2022-07-08"},
+                    {"id": "a", "title": "Black Mamba", "primary-type": "Single", "first-release-date": "2020-11-17"},
+                    {"id": "b", "title": "Supernova", "primary-type": "Single", "first-release-date": "2024-05-13"},
+                    {"id": "c", "title": "Armageddon", "primary-type": "Album", "first-release-date": "2024-05-27"}]}
+            return {"release-count": 2, "releases": [
+                {"title": "Girls", "date": "2022-07-08", "release-group": {"title": "Girls", "primary-type": "EP", "first-release-date": "2022-07-08"},
+                 "media": [{"tracks": [{"title": "Girls"}, {"title": "Black Mamba"}]}]},
+                {"title": "Armageddon", "date": "2024-05-27", "release-group": {"title": "Armageddon", "primary-type": "Album", "first-release-date": "2024-05-27"},
+                 "media": [{"tracks": [{"title": "Supernova"}, {"title": "Armageddon"}]}]}]}
+        with mock.patch.object(sources, "_get", side_effect=faux):
+            r = sources.clips_mb("x", "aespa")
+        self.assertEqual({c["titre"]: c["album"] for c in r}, {"Black Mamba": "Black Mamba", "Supernova": "Armageddon", "Armageddon": "Armageddon", "Girls": "Girls"})
 
 
 def _faux_youtube(entrees, formats_video):
@@ -149,8 +174,8 @@ class RoutesTest(unittest.TestCase):
         from werkzeug.security import generate_password_hash
         self.tmp = tempfile.TemporaryDirectory()
         self._env = {k: os.environ.get(k) for k in ("APP_USER", "APP_PASSWORD_HASH")}
+        import app as A                                   # l'import relit data/secrets.env : le compte d'essai se règle APRÈS
         os.environ.update(APP_USER="admin", APP_PASSWORD_HASH=generate_password_hash("mdp-de-test-123"))
-        import app as A
         self.A = A
         self.racine = Path(self.tmp.name) / "Video clip"
         (self.racine / "BLACKPINK" / "BORN PINK").mkdir(parents=True)

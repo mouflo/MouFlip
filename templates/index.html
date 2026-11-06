@@ -144,7 +144,8 @@ function dessiner() {
 function ligne(c, i) {
     return `<div class="clip" data-t="${esc(c.titre)}"><input type="checkbox" ${c.deja ? '' : 'checked'} aria-label="Choisir ce clip">
         <div><span class="t">${esc(c.titre)}</span> <span class="muted">${esc(c.album)}${c.annee ? ' · ' + esc(c.annee) : ''}</span>
-        ${c.deja ? '<span class="pill ok">✅ déjà dans la médiathèque</span>' : '<span class="pill">⬇️ à prendre</span>'}</div>
+        ${c.deja ? '<span class="pill ok">✅ déjà dans la médiathèque</span>' : '<span class="pill">⬇️ à prendre</span>'}
+        ${c.source === 'video' ? '<span class="pill" title="MusicBrainz connaît une vidéo pour ce titre">🎞️ vidéo connue</span>' : '<span class="pill warn" title="Single ou titre-phare : la vidéo officielle est à vérifier sur YouTube">à vérifier sur YouTube</span>'}</div>
         <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
         <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div></div>`;
 }
