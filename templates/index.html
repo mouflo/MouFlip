@@ -51,6 +51,12 @@
     .alt { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
     .alt button { text-align:left; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:.8rem; cursor:pointer; max-width:100%; }
     .alt button.cur { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 18%, var(--field)); }
+    .job { border-top:1px solid var(--line); padding:10px 0; }
+    .job .titre { font-weight:600; word-break:break-word; }
+    .job .barre { height:6px; background:var(--field); border-radius:3px; margin:6px 0; overflow:hidden; }
+    .job .barre i { display:block; height:100%; background:var(--accent); }
+    .job ul { margin:6px 0 6px 18px; padding:0; font-size:.78rem; color:var(--muted); word-break:break-all; }
+    .job .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
     .progress { background:var(--field); border-radius:6px; height:30px; position:relative; overflow:hidden; display:none; margin:8px 0; }
     .progress.show { display:block; }
     .progress .bar { background:var(--accent); height:100%; width:0; transition:width .4s; }
@@ -71,6 +77,12 @@
     </div>
 
     <div id="groupe" hidden></div>
+
+    <div class="panel" id="travaux" hidden>
+        <h3 style="margin:0 0 4px">Téléchargements et rangement</h3>
+        <div class="muted">Le clip est d'abord préparé sur le serveur (meilleure qualité, volume réglé). Il n'entre dans « Video clip » que quand tu touches « Ranger ».</div>
+        <div id="travauxListe"></div>
+    </div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -101,7 +113,9 @@ async function ouvrir(mbid) {
     $('groupe').hidden = true;
     const d = await api('/api/groupe/' + mbid);
     if (d.error) return note(d.error, 'err');
-    note(''); $('cands').innerHTML = ''; G = d; F = {}; dessiner();
+    note(''); $('cands').innerHTML = ''; G = d; F = {}; AP = {};
+    const ch = await api('/api/choix/' + mbid); V = ch.choix || {};
+    dessiner();
 }
 function filtreClips() {
     const t = $('fTypes') ? $('fTypes').value : 'clip', d = $('fDeja') ? $('fDeja').value : 'tous';
@@ -138,7 +152,7 @@ function dessiner() {
             <select id="fDeja"><option value="tous">Déjà là ou non</option><option value="manquants">Seulement ceux que je n’ai pas</option><option value="deja">Seulement ceux que j’ai</option></select>
             <button class="btn ghost small" id="toutCocher">Tout cocher</button><button class="btn ghost small" id="toutDecocher">Tout décocher</button>
         </div>
-        <div class="toolbar"><button class="btn" id="lireFormats">📊 Voir le meilleur format des clips cochés</button></div>
+        <div class="toolbar"><button class="btn ghost" id="lireFormats">📊 Voir le meilleur format des clips cochés</button><button class="btn" id="telecharger">⬇️ Télécharger les clips cochés</button></div>
         <div class="progress" id="prog"><div class="bar" id="progBar"></div><div class="txt" id="progTxt"></div></div>
         <div id="clips">${liste.map((c, i) => ligne(c, i)).join('') || '<div class="muted" style="padding:14px">Aucun clip dans cette vue.</div>'}</div>
     </div>`;
@@ -147,6 +161,7 @@ function dessiner() {
     $('toutCocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = true);
     $('toutDecocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = false);
     $('lireFormats').onclick = lireFormats;
+    $('telecharger').onclick = telechargerCoches;
     document.querySelectorAll('[data-voir]').forEach(b => b.onclick = () => voir(Number(b.dataset.voir), b));
     if ($('bioPlus')) $('bioPlus').onclick = e => { e.preventDefault(); $('bio').classList.toggle('ouverte'); };
 }
@@ -182,7 +197,7 @@ function montrer(i, titre, id) {
         <button class="btn small" data-choisir="1">${V[titre] === cur.id ? '✅ Vidéo choisie' : '✅ C’est cette vidéo'}</button>`;
     zone.querySelector('.lecteur').onclick = e => { e.currentTarget.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(cur.id)}?autoplay=1&rel=0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; e.currentTarget.onclick = null; };
     zone.querySelectorAll('.alt button').forEach(b => b.onclick = () => montrer(i, titre, b.dataset.id));
-    zone.querySelector('[data-choisir]').onclick = () => { V[titre] = cur.id; montrer(i, titre, cur.id); const p = document.querySelectorAll('.clip')[i].querySelector('.voir .btn'); if (p && !p.nextElementSibling.classList.contains('pill')) p.insertAdjacentHTML('afterend', ' <span class="pill ok">vidéo choisie</span>'); };
+    zone.querySelector('[data-choisir]').onclick = () => { V[titre] = cur.id; post('/api/choix', {mbid: G.fiche.mbid, titre, video_id: cur.id}); montrer(i, titre, cur.id); const p = document.querySelectorAll('.clip')[i].querySelector('.voir .btn'); if (p && !p.nextElementSibling.classList.contains('pill')) p.insertAdjacentHTML('afterend', ' <span class="pill ok">vidéo choisie</span>'); };
 }
 async function lireFormats() {
     const titres = [...document.querySelectorAll('.clip')].filter(el => el.querySelector('input').checked).map(el => el.dataset.t);
@@ -203,8 +218,54 @@ async function lireFormats() {
     };
     boucle();
 }
+async function telechargerCoches() {
+    const els = [...document.querySelectorAll('.clip')].filter(el => el.querySelector('input').checked);
+    if (!els.length) return note('Coche au moins un clip.', 'warn');
+    const clips = els.map(el => { const c = G.clips.find(x => x.titre === el.dataset.t); return {titre: c.titre, album: c.album, annee: c.annee, mbid: c.mbid, video_id: V[c.titre] || ''}; });
+    if (!await MouConfirm(`Télécharger ${clips.length} clip(s) de ${G.fiche.nom} ?\n\nIls sont préparés sur le serveur (meilleure qualité, volume réglé). Rien n'est rangé dans « Video clip » avant ton accord, clip par clip.`, {ok: 'Télécharger', annuler: 'Annuler'})) return;
+    note('Lancement…');
+    const d = await post('/api/travaux', {mbid: G.fiche.mbid, clips});
+    if (d.error) return note(d.error, 'err');
+    note(`${(d.travaux || []).length} clip(s) mis en file : suis l'avancement en bas de page.`);
+    suivreTravaux();
+}
+let _timerTravaux = null;
+async function suivreTravaux() {
+    clearTimeout(_timerTravaux);
+    const d = await api('/api/travaux');
+    const liste = d.travaux || [];
+    $('travaux').hidden = !liste.length;
+    $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
+    document.querySelectorAll('[data-plan]').forEach(b => b.onclick = () => { const z = $('plan' + b.dataset.plan); z.hidden = !z.hidden; });
+    document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
+    document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
+    document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
+    if (liste.some(t => ['attente', 'telechargement', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
+}
+function carteTravail(t) {
+    const actif = ['attente', 'telechargement', 'audio'].includes(t.etat);
+    const pill = {attente: '<span class="pill">en attente</span>', telechargement: '<span class="pill warn">téléchargement</span>', audio: '<span class="pill warn">volume</span>',
+                  pret: '<span class="pill ok">prêt à ranger</span>', range: '<span class="pill ok">✅ rangé</span>', erreur: '<span class="pill err">erreur</span>'}[t.etat] || '';
+    const plan = (t.plan || []).map(l => `<li>${l.existe ? '⏭️ existe déjà : ' : '＋ '}${esc(l.chemin)}</li>`).join('');
+    return `<div class="job"><div class="titre">${esc(t.groupe)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> ${pill}</div>
+        ${actif ? `<div class="barre"><i style="width:${t.progres || 0}%"></i></div>` : ''}
+        <div class="muted">${esc(t.message || '')}</div>
+        ${t.etat === 'pret' ? `<div id="plan${t.id}" hidden><div class="muted" style="margin-top:6px">Ce qui sera créé dans « Video clip » :</div><ul>${plan}</ul></div>` : ''}
+        <div class="acts">
+        ${t.etat === 'pret' ? `<button class="btn small ghost" data-plan="${t.id}">📋 Voir ce qui sera créé</button><button class="btn small" data-ranger="${t.id}" data-nom="${esc(t.titre)}">📁 Ranger dans Video clip</button>` : ''}
+        ${t.etat === 'erreur' ? `<button class="btn small" data-relancer="${t.id}">↻ Relancer</button>` : ''}
+        ${actif ? '' : `<button class="btn small ghost" data-retirer="${t.id}">Retirer de la liste</button>`}</div></div>`;
+}
+async function ranger(id, nom) {
+    if (!await MouConfirm(`Ranger « ${nom} » dans « Video clip » ?\n\nLe clip, son .nfo, son poster et les images du groupe qui manquent seront créés. Rien d'existant n'est remplacé.`, {ok: 'Ranger', annuler: 'Pas maintenant'})) return;
+    note('Rangement…');
+    const r = await post('/api/travaux/' + id + '/ranger');
+    note(r.ok ? 'Rangé. ' + (r.emby || '') : (r.error || 'Rangement impossible.'), r.ok ? '' : 'err');
+    suivreTravaux();
+}
 $('chercher').addEventListener('click', chercher);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') chercher(); });
+suivreTravaux();
 </script>
 </body>
 </html>

@@ -43,6 +43,42 @@
         <div id="clipsMsg"></div>
     </div>
 
+    <div class="panel" data-onglet="Général">
+        <h2>🔊 Volume des clips</h2>
+        <div class="sub">Même réglage que les thèmes de MouFlopening : chaque clip est ramené au même niveau (ReplayGain, 89 dB = référence). Tes clips actuels sont à 90 dB environ. Seule la piste audio est refaite (AAC) ; l'image n'est jamais réencodée.</div>
+        <div class="field" style="max-width:200px"><label for="dbValue">Niveau en dB (entre 70 et 100)</label><input type="text" inputmode="decimal" id="dbValue" autocomplete="off" placeholder="89"></div>
+        <div class="field" style="max-width:200px"><label for="dbDebit">Débit audio (AAC)</label><select id="dbDebit"><option>128k</option><option>160k</option><option>192k</option><option>256k</option><option>320k</option></select></div>
+        <div class="row"><button class="btn" id="dbSave">Enregistrer</button></div>
+        <div id="dbMsg"></div>
+    </div>
+
+    <div class="panel" data-onglet="Connexions">
+        <h2>🖼️ fanart.tv</h2>
+        <div class="sub">Pour de belles images de groupe (logo, bannière, fonds, pochettes d'album, cdart) en plus de TheAudioDB. Clé personnelle gratuite : fanart.tv → ton compte → « Personal API Key ».</div>
+        <div class="state" id="faState"></div>
+        <div class="field"><label for="faKey">Clé API</label><input type="password" id="faKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Colle la clé ici"></div>
+        <div class="row"><button class="btn ghost" id="faTest">Tester</button><button class="btn" id="faSave">Enregistrer la clé</button></div>
+        <div id="faMsg"></div>
+    </div>
+
+    <div class="panel" data-onglet="Connexions">
+        <h2>🎵 TheAudioDB <small style="color:var(--muted);font-weight:400">(facultatif)</small></h2>
+        <div class="sub">Biographie en français et images de groupe. Sans clé personnelle, la clé publique de test est utilisée (suffisant pour un usage normal).</div>
+        <div class="state" id="audKeyState"></div>
+        <div class="field"><label for="audKey">Clé API</label><input type="password" id="audKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Colle la clé ici"></div>
+        <div class="row"><button class="btn ghost" id="audKeyTest">Tester</button><button class="btn" id="audKeySave">Enregistrer la clé</button></div>
+        <div id="audKeyMsg"></div>
+    </div>
+
+    <div class="panel" data-onglet="Connexions">
+        <h2>🎞️ IMVDb <small style="color:var(--muted);font-weight:400">(en attente)</small></h2>
+        <div class="sub">Base de clips vidéo. Leur recherche est coupée pour l'instant : la clé est gardée pour quand elle reviendra.</div>
+        <div class="state" id="imvKeyState"></div>
+        <div class="field"><label for="imvKey">Clé API</label><input type="password" id="imvKey" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Colle la clé ici"></div>
+        <div class="row"><button class="btn ghost" id="imvKeyTest">Tester</button><button class="btn" id="imvKeySave">Enregistrer la clé</button></div>
+        <div id="imvKeyMsg"></div>
+    </div>
+
     <div class="panel" data-onglet="Connexions">
         <h2>🍪 Cookies YouTube</h2>
         <div class="sub">Pour lire (puis télécharger) les formats réservés au compte Premium. Le contenu n'est jamais affiché, ni envoyé sur GitHub, ni écrit dans le Journal.</div>
@@ -71,8 +107,13 @@ async function loadAll() {
     $('embyKeyState').textContent = e.configured ? 'Clé enregistrée (' + e.hint + ')' : 'Aucune clé enregistrée';
     const d = await api('/api/settings/dossier'); $('clipsDir').value = d.dossier || '';
     $('clipsState').textContent = d.ok ? '✅ Dossier accessible' : '⚠️ Dossier introuvable (le partage est-il monté ?)';
+    const au = await api('/api/settings/audio'); $('dbValue').value = au.cible_db; $('dbDebit').value = au.debit;
+    const fa = await api('/api/settings/fanart'); $('faState').textContent = fa.configured ? 'Clé enregistrée (' + fa.hint + ')' : 'Aucune clé : seules les images de TheAudioDB sont utilisées.';
     loadCk(); loadOutils();
 }
+$('faTest').addEventListener('click', async () => { const r = await post('/api/settings/fanart', {api_key: $('faKey').value, test: true}); say('faMsg', r.message || r.error, r.ok); });
+$('faSave').addEventListener('click', async () => { const r = await post('/api/settings/fanart', {api_key: $('faKey').value}); say('faMsg', r.message || r.error, r.ok); if (r.ok) { $('faKey').value = ''; loadAll(); } });
+$('dbSave').addEventListener('click', async () => { const r = await post('/api/settings/audio', {target_db: $('dbValue').value, bitrate: $('dbDebit').value}); say('dbMsg', r.message || r.error, r.ok); });
 $('embyHostSave').addEventListener('click', async () => { const r = await post('/api/settings/emby-host', {host: $('embyHost').value}); say('embyHostMsg', r.message || r.error, r.ok); });
 $('embyKeyTest').addEventListener('click', async () => { const r = await post('/api/settings/emby', {api_key: $('embyKey').value, test: true}); say('embyKeyMsg', r.message || r.error, r.ok); });
 $('embyKeySave').addEventListener('click', async () => { const r = await post('/api/settings/emby', {api_key: $('embyKey').value}); say('embyKeyMsg', r.message || r.error, r.ok); if (r.ok) { $('embyKey').value = ''; loadAll(); } });
@@ -86,6 +127,8 @@ async function loadOutils() {
     $('outils').innerHTML = [['yt-dlp', o.yt_dlp], ['Script de défi YouTube (yt-dlp-ejs)', o.yt_dlp_ejs], ['deno', o.deno], ['ffmpeg', o.ffmpeg ? 'présent' : '']]
         .map(([n, v]) => (v ? '✅ ' : '❌ ') + esc(n) + (v ? ' : ' + esc(v) : ' : ABSENT')).join('<br>');
 }
+keyForm('aud', '/api/settings/theaudiodb');
+keyForm('imv', '/api/settings/imvdb');
 loadAll();
 </script>
 </body>

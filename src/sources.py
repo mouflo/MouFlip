@@ -99,23 +99,53 @@ def images_audiodb(mbid: str) -> dict:
                                                 ("fanart4", "strArtistFanart4")) if a.get(v)}}
 
 
+def images_fanart(mbid: str) -> dict:
+    """Images soignées de fanart.tv (API officielle, clé personnelle gratuite FANART_API_KEY ; sans clé : {} et cle=False).
+    Retourne {"cle": bool, "images": {vignette, banniere, logo, fanart, fanart2.. }, "albums": {id du groupe de sorties: {cdart, couverture}}}.
+    À chaque type d'image, la préférée des visiteurs de fanart.tv (le plus de « j'aime »)."""
+    cle = os.getenv("FANART_API_KEY", "").strip()
+    if not cle:
+        return {"cle": False, "images": {}, "albums": {}}
+    d = _get(f"https://webservice.fanart.tv/v3/music/{mbid}", {"api_key": cle})
+    if not d:
+        return {"cle": True, "images": {}, "albums": {}}
+
+    def tri(lst):
+        return [x["url"] for x in sorted(lst or [], key=lambda x: -int(x.get("likes") or 0)) if x.get("url")]
+
+    fonds = tri(d.get("artistbackground"))
+    images = {}
+    for nom, source in (("vignette", tri(d.get("artistthumb"))), ("banniere", tri(d.get("musicbanner"))),
+                        ("logo", tri(d.get("hdmusiclogo")) or tri(d.get("musiclogo")))):
+        if source:
+            images[nom] = source[0]
+    for i, u in enumerate(fonds[:4]):
+        images["fanart" if i == 0 else f"fanart{i + 1}"] = u
+    albums = {}
+    for rg, a in (d.get("albums") or {}).items():
+        cd, cv = tri(a.get("cdart")), tri(a.get("albumcover"))
+        if cd or cv:
+            albums[rg] = {k: v[0] for k, v in (("cdart", cd), ("couverture", cv)) if v}
+    return {"cle": True, "images": images, "albums": albums}
+
+
 def resume_wikipedia(titre: str, langue: str = "fr") -> str:
     d = _get(f"https://{langue}.wikipedia.org/api/rest_v1/page/summary/{quote(titre.replace(' ', '_'))}")
     return ((d or {}).get("extract") or "") if (d or {}).get("type") == "standard" else ""
 
 
-def _album_choisi(releases: list[dict], titre: str) -> tuple[str, str]:
+def _album_choisi(releases: list[dict], titre: str) -> tuple[str, str, str]:
     """(album, date) : le groupe de sorties « officiel » le plus ancien (Album, EP ou Single sans Live/Compilation/Remix…) ;
     à défaut le titre du clip lui-même (un single range son clip dans un dossier à son nom, comme tes clips actuels)."""
     bons = []
     for r in releases:
         rg = r.get("release-group") or {}
         if rg.get("primary-type") in ("Album", "EP", "Single") and not rg.get("secondary-types"):
-            bons.append((r.get("date") or "9999", rg.get("title") or r.get("title") or "", r.get("date") or ""))
+            bons.append((r.get("date") or "9999", rg.get("title") or r.get("title") or "", r.get("date") or "", rg.get("id") or ""))
     if bons:
         bons.sort()
-        return bons[0][1], bons[0][2]
-    return titre, ""
+        return bons[0][1], bons[0][2], bons[0][3]
+    return titre, "", ""
 
 
 def _sorties(mbid: str) -> list[dict]:
@@ -150,7 +180,7 @@ def _pistes_des_albums(mbid: str) -> dict:
                 for t in m.get("tracks", []):
                     n = normaliser(t.get("title", ""))
                     if n and (n not in out or (date or "9999") < (out[n][1] or "9999")):
-                        out[n] = (rg.get("title") or r.get("title") or "", date)
+                        out[n] = (rg.get("title") or r.get("title") or "", date, rg.get("id") or "")
         offset += 100
         if offset >= d.get("release-count", 0) or not lot:
             break
@@ -182,7 +212,7 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
         x, y = d(a), d(b)
         return (y - x).days if x and y else None
 
-    def ajouter(titre, album, date, source, mb_id="", duree=0):
+    def ajouter(titre, album, date, source, mb_id="", duree=0, rg=""):
         n = normaliser(titre) or titre
         if _VARIANTE.search(titre) or _PAS_CLIP.search(titre):
             return
@@ -192,7 +222,7 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
             # un single de pré-sortie (moins de 100 jours avant l'album) va dans l'album (« Armageddon/Supernova »)
             ecart = _jours(singles[n], album_pistes[1]) if n in singles else None
             if n not in singles or (ecart is not None and 0 <= ecart <= 100):
-                album, date = album_pistes[0], (date or album_pistes[1])
+                album, date, rg = album_pistes[0], (date or album_pistes[1]), album_pistes[2]
         annee = (date or "")[:4]
         if n in candidats:
             c = candidats[n]
@@ -201,7 +231,7 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
             if annee and (not c["annee"] or annee < c["annee"]):
                 c["annee"] = annee
             return
-        candidats[n] = {"titre": titre.strip(), "album": album or titre.strip(), "annee": annee, "mbid": mb_id, "type": "clip", "source": source, "duree": duree}
+        candidats[n] = {"titre": titre.strip(), "album": album or titre.strip(), "annee": annee, "mbid": mb_id, "type": "clip", "source": source, "duree": duree, "rg": rg}
 
     # (1) vidéos répertoriées par MusicBrainz
     offset = 0
@@ -214,15 +244,15 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
             live_seulement = bool(rels) and all("Live" in ((x.get("release-group") or {}).get("secondary-types") or []) for x in rels)
             if not titre or live_seulement:
                 continue
-            album, date = _album_choisi(rels, titre)
-            ajouter(titre, album, r.get("first-release-date") or date, "video", r.get("id", ""), round((r.get("length") or 0) / 1000))
+            album, date, rg = _album_choisi(rels, titre)
+            ajouter(titre, album, r.get("first-release-date") or date, "video", r.get("id", ""), round((r.get("length") or 0) / 1000), rg)
         offset += 100
         if offset >= d.get("count", 0) or not lot:
             break
     # (2) singles et titres-phares
     for g in sorties:
         if g["type"] == "Single" or normaliser(g["titre"]) in pistes:
-            ajouter(g["titre"], g["titre"] if g["type"] == "Single" else "", g["date"], "sortie")
+            ajouter(g["titre"], g["titre"] if g["type"] == "Single" else "", g["date"], "sortie", rg=g["id"])
     sortie = sorted(candidats.values(), key=lambda c: (c["annee"] or "9999", normaliser(c["titre"])))
     if erreurs_pistes:
         for c in sortie:

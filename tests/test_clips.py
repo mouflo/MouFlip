@@ -1,5 +1,6 @@
 """MouFlip, premier morceau (lecture seule) : noms, clips déjà présents, choix de la vidéo YouTube et du meilleur format, routes.
 Aucun réseau (MusicBrainz, TheAudioDB et YouTube sont remplacés), dossier « Video clip » fabriqué dans un dossier temporaire."""
+import json
 import os
 import sys
 import tempfile
@@ -74,8 +75,8 @@ class CliposTest(unittest.TestCase):
     def test_album_et_type(self):
         rel = [{"title": "THE SHOW", "date": "2021-06-18", "release-group": {"primary-type": "Album", "secondary-types": ["Live"]}},
                {"title": "Kill This Love", "date": "2019-04-09", "release-group": {"primary-type": "Single", "title": "Kill This Love"}}]
-        self.assertEqual(sources._album_choisi(rel, "Kill This Love"), ("Kill This Love", "2019-04-09"))
-        self.assertEqual(sources._album_choisi([], "Shut Down"), ("Shut Down", ""))
+        self.assertEqual(sources._album_choisi(rel, "Kill This Love"), ("Kill This Love", "2019-04-09", ""))
+        self.assertEqual(sources._album_choisi([], "Shut Down"), ("Shut Down", "", ""))
 
     def test_meme_titre_dans_plusieurs_albums_un_seul_clip(self):
         page = {"count": 2, "recordings": [
@@ -225,6 +226,27 @@ class RoutesTest(unittest.TestCase):
                 time.sleep(0.05)
         self.assertEqual((e["fait"], e["total"], sorted(e["resultats"])), (2, 2, ["Pink Venom", "Shut Down"]))
         self.assertEqual(self.c.post("/api/formats", json={"groupe": "", "titres": []}).status_code, 400)
+
+    def test_cles_des_reglages_jamais_renvoyees_en_entier(self):
+        with mock.patch.object(self.A, "_tester_http", return_value=(200, "")), \
+                mock.patch.object(self.A.emby_settings, "_write_secret") as ecrire, mock.patch.dict(os.environ, {"FANART_API_KEY": ""}):
+            r = self.c.post("/api/settings/imvdb", json={"api_key": "abcdefghij1234567890abcdefghij1234567890", "test": True}).get_json()
+            self.assertTrue(r["ok"])
+            ecrire.assert_not_called()                                           # « Tester » n'enregistre rien
+            r = self.c.post("/api/settings/imvdb", json={"api_key": "abcdefghij1234567890abcdefghij1234567890"}).get_json()
+            self.assertTrue(r["ok"])
+            self.assertEqual(ecrire.call_args.args[1], "IMVDB_API_KEY")
+            etat = self.c.get("/api/settings/imvdb").get_json()                  # relu dans le même bloc : l'environnement d'essai est restauré à la sortie
+            self.assertTrue(etat["configured"])
+            self.assertEqual(etat["hint"], "…7890")
+            self.assertNotIn("abcdefghij1234567890abcdefghij", json.dumps(etat))
+
+    def test_cle_refusee_par_le_service_n_est_pas_enregistree(self):
+        with mock.patch.object(self.A, "_tester_http", return_value=(403, "")), mock.patch.object(self.A.emby_settings, "_write_secret") as ecrire:
+            r = self.c.post("/api/settings/imvdb", json={"api_key": "abcdefghij1234567890"})
+        self.assertEqual(r.status_code, 400)
+        ecrire.assert_not_called()
+        self.assertEqual(self.c.post("/api/settings/imvdb", json={"api_key": "a b"}).status_code, 400)
 
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)

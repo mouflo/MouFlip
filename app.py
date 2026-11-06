@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import existants, formats, noms, sources, ytcookies
+from src import audio, existants, formats, noms, sources, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -30,6 +30,8 @@ BASE_VERSION = "0.1"
 CONFIG = load_config()
 EMBY = EmbyClient(CONFIG.get("emby", {}))
 DOSSIER_CLIPS = (CONFIG.get("clips") or {}).get("dossier") or "/mnt/mouflosyno/Emby-Media/Video clip"
+AUDIO = {"cible_db": float(((CONFIG.get("clips") or {}).get("audio") or {}).get("target_db", audio.REFERENCE_DB)),
+         "debit": str(((CONFIG.get("clips") or {}).get("audio") or {}).get("bitrate", "192k"))}
 
 
 def _version() -> str:
@@ -85,12 +87,17 @@ def _groupe_complet(mbid: str) -> dict:
             audiodb = sources.images_audiodb(mbid)
         except sources.SourceIndisponible as e:
             erreurs.append(str(e))
+        fanart = {"cle": False, "images": {}, "albums": {}}
+        try:
+            fanart = sources.images_fanart(mbid)
+        except sources.SourceIndisponible as e:
+            erreurs.append(str(e))
         if not (audiodb.get("biographie")):
             try:
                 wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
             except sources.SourceIndisponible as e:
                 erreurs.append(str(e))
-        base = {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs}
+        base = {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart}
         _CACHE_GROUPES[mbid] = (time.time(), base)
     fiche = base["fiche"]
     dossier = existants.dossier_du_groupe(DOSSIER_CLIPS, [fiche["nom"]] + fiche.get("alias", []))
@@ -103,7 +110,8 @@ def _groupe_complet(mbid: str) -> dict:
                       "chemin_prevu": noms.chemin_prevu(DOSSIER_CLIPS, nom_dossier, fiche["nom"], c["album"], c["titre"])})
     return {"fiche": fiche, "dossier_groupe": str(dossier) if dossier else "", "dossier_nouveau": not dossier, "nb_locaux": len(locaux),
             "biographie": base["audiodb"].get("biographie") or base["wikipedia"], "biographie_langue": base["audiodb"].get("biographie_langue") or ("fr" if base["wikipedia"] else ""),
-            "images": base["audiodb"].get("images", {}), "clips": clips, "erreurs": base["erreurs"], "racine": DOSSIER_CLIPS,
+            "images": {**base["audiodb"].get("images", {}), **base["fanart"]["images"]}, "images_album": base["fanart"]["albums"],
+            "fanart_cle": base["fanart"]["cle"], "clips": clips, "erreurs": base["erreurs"], "racine": DOSSIER_CLIPS,
             "racine_ok": Path(DOSSIER_CLIPS).is_dir()}
 
 
@@ -168,6 +176,196 @@ def api_formats_etat():
         if not j:
             return jsonify({"error": "Lot inconnu."}), 404
         return jsonify({"total": j["total"], "fait": j["fait"], "fini": j["fini"], "resultats": dict(j["resultats"])})
+
+
+def _contexte_groupe(mbid: str) -> dict:
+    """Tout ce qu'il faut savoir du groupe pour ranger ses clips (fiche, dossier existant, images, biographie)."""
+    g = _groupe_complet(mbid)
+    return {"nom": g["fiche"]["nom"], "mbid": mbid, "fiche": g["fiche"], "dossier_groupe": g["dossier_groupe"], "images": g["images"],
+            "biographie": g["biographie"], "images_album": g.get("images_album", {}), "genre": (g["fiche"].get("genres") or ["K-Pop"])[0].title() if (g["fiche"].get("genres") or []) else "K-Pop"}
+
+
+@app.route("/api/travaux", methods=["GET", "POST"])
+def api_travaux():
+    if request.method == "GET":
+        return jsonify({"travaux": travaux.lister(), "place_go": round(__import__("src.telechargement", fromlist=["x"]).place_libre_go(BASE_DIR / "data" / "travail"), 1)})
+    b = request.get_json(silent=True) or {}
+    mbid, clips = str(b.get("mbid", "")), b.get("clips") or []
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not clips:
+        return jsonify({"error": "Choisis au moins un clip."}), 400
+    try:
+        ctx = _contexte_groupe(mbid)
+    except sources.SourceIndisponible as e:
+        return jsonify({"error": f"MusicBrainz est injoignable : {e}"}), 502
+    choix = _choix_lire().get(mbid, {})
+    ajoutes = []
+    for c in clips[:40]:
+        titre = str(c.get("titre", "")).strip()
+        if not titre:
+            continue
+        ajoutes.append(travaux.ajouter(ctx, {"titre": titre, "album": str(c.get("album") or titre), "annee": str(c.get("annee") or ""),
+                                              "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or ""), "video_id": str(c.get("video_id") or choix.get(titre, ""))}))
+    return jsonify({"travaux": ajoutes})
+
+
+@app.route("/api/travaux/<tid>/ranger", methods=["POST"])
+def api_travaux_ranger(tid):
+    r = travaux.ranger(tid)
+    return jsonify(r), (200 if r.get("ok") else 409)
+
+
+@app.route("/api/travaux/<tid>/relancer", methods=["POST"])
+def api_travaux_relancer(tid):
+    return jsonify(travaux.relancer(tid))
+
+
+@app.route("/api/travaux/<tid>/supprimer", methods=["POST"])
+def api_travaux_supprimer(tid):
+    r = travaux.supprimer(tid)
+    return jsonify(r), (200 if r.get("ok") else 409)
+
+
+def _choix_fichier():
+    return BASE_DIR / "data" / "choix.json"
+
+
+def _choix_lire() -> dict:
+    import json
+    try:
+        return json.loads(_choix_fichier().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+@app.route("/api/choix/<mbid>", methods=["GET"])
+def api_choix_lire(mbid):
+    return jsonify({"choix": _choix_lire().get(mbid, {})})
+
+
+@app.route("/api/choix", methods=["POST"])
+def api_choix_ecrire():
+    """Retient la vidéo choisie pour un clip (survit au rechargement de la page)."""
+    import json
+    b = request.get_json(silent=True) or {}
+    mbid, titre, vid = str(b.get("mbid", "")), str(b.get("titre", "")).strip(), str(b.get("video_id", ""))
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not titre or not re.fullmatch(r"[\w-]{11}", vid):
+        return jsonify({"ok": False, "error": "Choix invalide."}), 400
+    d = _choix_lire()
+    d.setdefault(mbid, {})[titre] = vid
+    tmp = _choix_fichier().with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, _choix_fichier())
+    return jsonify({"ok": True})
+
+
+@app.route("/api/settings/fanart", methods=["GET", "POST"])
+def api_fanart():
+    """Clé personnelle fanart.tv (gratuite) : logos, bannières, fonds et pochettes soignés. Jamais renvoyée en entier."""
+    cle = os.getenv("FANART_API_KEY", "").strip()
+    if request.method == "GET":
+        return jsonify({"configured": bool(cle), "hint": ("…" + cle[-4:]) if len(cle) >= 8 else ""})
+    b = request.get_json(silent=True) or {}
+    nouvelle = str(b.get("api_key", "")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9]{16,64}", nouvelle):
+        return jsonify({"ok": False, "error": "Clé invalide : lettres et chiffres uniquement (colle-la sans espace ni guillemets)."}), 400
+    try:
+        r = __import__("requests").get("https://webservice.fanart.tv/v3/music/48646387-1664-4c9a-9139-9bfd091b823c", params={"api_key": nouvelle},
+                                       headers={"User-Agent": sources.UA}, timeout=15)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"fanart.tv est injoignable : {e}"}), 502
+    ok = r.status_code == 200
+    if r.status_code in (401, 403):
+        return jsonify({"ok": False, "error": "fanart.tv refuse cette clé."}), 400
+    if b.get("test"):
+        return jsonify({"ok": ok, "message": "Clé acceptée par fanart.tv." if ok else f"fanart.tv a répondu {r.status_code}."})
+    if not ok:
+        return jsonify({"ok": False, "error": f"fanart.tv a répondu {r.status_code} : rien n'a été enregistré."}), 400
+    emby_settings._write_secret(BASE_DIR / "data" / "secrets.env", "FANART_API_KEY", nouvelle)
+    os.environ["FANART_API_KEY"] = nouvelle
+    _CACHE_GROUPES.clear()
+    logger.info("Clé fanart.tv enregistrée")
+    return jsonify({"ok": True, "message": "Clé enregistrée et acceptée par fanart.tv."})
+
+
+def _route_cle(nom_route, variable, tester):
+    """Une clé API saisie dans ⚙️ Réglages : testée auprès du service (« Tester » ne l'enregistre pas), enregistrée dans data/secrets.env (droits 600),
+    jamais renvoyée en entier (seulement ses 4 derniers caractères)."""
+    def vue():
+        cle = os.getenv(variable, "").strip()
+        if request.method == "GET":
+            return jsonify({"configured": bool(cle), "hint": ("…" + cle[-4:]) if len(cle) >= 8 else ""})
+        b = request.get_json(silent=True) or {}
+        nouvelle = str(b.get("api_key", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{6,128}", nouvelle):
+            return jsonify({"ok": False, "error": "Clé invalide : lettres et chiffres uniquement (colle-la sans espace ni guillemets)."}), 400
+        ok, msg = tester(nouvelle)
+        if b.get("test"):
+            return jsonify({"ok": ok, "message": msg})
+        if not ok:
+            return jsonify({"ok": False, "error": msg + ". Rien n'a été enregistré."}), 400
+        emby_settings._write_secret(BASE_DIR / "data" / "secrets.env", variable, nouvelle)
+        os.environ[variable] = nouvelle
+        _CACHE_GROUPES.clear()
+        logger.info("Clé %s enregistrée", variable)
+        return jsonify({"ok": True, "message": "Clé enregistrée. " + msg})
+    vue.__name__ = "cle_" + nom_route
+    app.add_url_rule(f"/api/settings/{nom_route}", view_func=vue, methods=["GET", "POST"])
+
+
+def _tester_http(url, **kw):
+    try:
+        r = __import__("requests").get(url, headers={"User-Agent": sources.UA, **kw.pop("headers", {})}, timeout=15, **kw)
+    except Exception as e:
+        return None, f"Service injoignable ({e})"
+    return r.status_code, ""
+
+
+def _tester_audiodb(cle):
+    code, err = _tester_http(f"https://www.theaudiodb.com/api/v1/json/{cle}/artist-mb.php", params={"i": "48646387-1664-4c9a-9139-9bfd091b823c"})
+    if code is None:
+        return False, err
+    return (code == 200), ("Clé acceptée par TheAudioDB." if code == 200 else f"TheAudioDB a répondu {code}")
+
+
+def _tester_imvdb(cle):
+    code, err = _tester_http("https://imvdb.com/api/v1/video/215233331710", headers={"IMVDB-APP-KEY": cle})
+    if code is None:
+        return False, err
+    return (code == 200), ("Clé acceptée par IMVDb (leur recherche est coupée pour l'instant : elle servira quand elle reviendra)." if code == 200
+                           else "IMVDb refuse cette clé" if code == 403 else f"IMVDb a répondu {code}")
+
+
+_route_cle("theaudiodb", "THEAUDIODB_KEY", _tester_audiodb)
+_route_cle("imvdb", "IMVDB_API_KEY", _tester_imvdb)
+
+
+@app.route("/api/settings/audio", methods=["GET", "POST"])
+def api_audio():
+    """Volume des clips (même réglage que les thèmes de MouFlopening : 89 dB) et débit AAC de la piste refaite."""
+    if request.method == "GET":
+        return jsonify(AUDIO)
+    b = request.get_json(silent=True) or {}
+    try:
+        cible = round(float(str(b.get("target_db", "")).replace(",", ".")), 1)
+    except ValueError:
+        return jsonify({"ok": False, "error": "Entre un nombre, par exemple 89."}), 400
+    debit = str(b.get("bitrate", AUDIO["debit"])).strip().lower()
+    if not 70 <= cible <= 100:
+        return jsonify({"ok": False, "error": "Choisis un niveau entre 70 et 100 dB (89 est la référence habituelle)."}), 400
+    if debit not in ("128k", "160k", "192k", "256k", "320k"):
+        return jsonify({"ok": False, "error": "Débit audio : 128k, 160k, 192k, 256k ou 320k."}), 400
+    import json
+    chemin = BASE_DIR / "config.json"
+    try:
+        cfg = json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else {}
+    except ValueError:
+        return jsonify({"ok": False, "error": "config.json est illisible : rien n'a été modifié."}), 500
+    cfg.setdefault("clips", {}).setdefault("audio", {}).update(target_db=cible, bitrate=debit)
+    tmp = chemin.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, chemin)
+    AUDIO.update(cible_db=cible, debit=debit)
+    return jsonify({"ok": True, "message": f"Enregistré : les prochains clips seront à {cible:g} dB (audio AAC {debit}). Les clips déjà rangés ne changent pas."})
 
 
 _APERCUS = {}                      # (groupe, titre) -> (heure, candidats) : 30 min
@@ -285,9 +483,26 @@ def api_cookies():
 import redemarrage
 redemarrage.init_app(app, BASE_DIR)
 import redemarrer
-redemarrer.init_app(app, lambda: ["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else [])
+redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe())
+travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY)
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")
 
+def _mise_a_jour_ytdlp(premiere_attente=120, toutes=24 * 3600):
+    """yt-dlp suit les changements de YouTube : mise à jour au démarrage puis chaque jour, jamais pendant un clip."""
+    time.sleep(premiere_attente)
+    while True:
+        while travaux.occupe():
+            time.sleep(300)
+        try:
+            r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "yt-dlp", "yt-dlp-ejs"], capture_output=True, text=True, timeout=300)
+            logger.info("yt-dlp : mise à jour %s", "faite" if r.returncode == 0 else "impossible : " + (r.stderr or r.stdout)[-200:])
+        except Exception as e:
+            logger.error("yt-dlp : mise à jour en erreur : %s", e)
+        time.sleep(toutes)
+
+
 if __name__ == "__main__":
+    travaux.demarrer()
+    threading.Thread(target=_mise_a_jour_ytdlp, daemon=True, name="maj-ytdlp").start()
     redemarrage.verifier(BASE_DIR, "MouFlip", BASE_DIR / "data" / "mouflip.log", lambda t: None)
     app.run(debug=False, host="0.0.0.0", port=8004)
