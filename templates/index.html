@@ -135,6 +135,11 @@
     .ajout .champ { display:block; margin:8px 0; } .ajout .champ input { width:100%; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:9px; }
     label.red { font-size:.82rem; color:var(--muted); display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
     label.red select { background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; max-width:100%; }
+    /* barre collée en haut de l'écran pendant qu'on fait défiler la liste des clips : plus besoin de remonter pour lancer le téléchargement */
+    .barre-clips { position:sticky; top:0; z-index:30; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--card); padding:10px 0; margin:8px 0 4px; border-bottom:1px solid var(--line); box-shadow:0 6px 10px -8px rgba(0,0,0,.6); }
+    .barre-clips .resume { flex:1 1 100%; font-size:.88rem; color:var(--muted); } .barre-clips .resume b { color:var(--text); }
+    .barre-clips .btn#telecharger { flex:1; padding:11px 14px; }
+    @media (min-width:600px) { .barre-clips .resume { flex:1 1 auto; } .barre-clips .btn#telecharger { flex:none; } }
     .progress { background:var(--field); border-radius:6px; height:30px; position:relative; overflow:hidden; display:none; margin:8px 0; }
     .progress.show { display:block; }
     .progress .bar { background:var(--accent); height:100%; width:0; transition:width .4s; }
@@ -235,12 +240,16 @@ function dessiner() {
     </div>
     <div class="panel">
         <h3 style="margin:0 0 4px">Clips (${liste.length} affichés sur ${G.clips.length})</h3>
+        <div class="barre-clips" id="barreClips">
+            <span class="resume" id="nbCoches"></span>
+            <button class="btn ghost small" id="toutCocher">Tout cocher</button><button class="btn ghost small" id="toutDecocher">Tout décocher</button>
+            <button class="btn" id="telecharger">⬇️ Télécharger</button>
+        </div>
         <div class="muted">${G.enregistre ? '📌 Liste enregistrée le ' + new Date(G.enregistre * 1000).toLocaleDateString('fr-FR') + ' (pas redemandée à chaque fois) · ' : ''}<a href="#" id="actualiser">🔄 Actualiser la liste</a></div>
         <div class="muted">Liste de MusicBrainz : elle peut être incomplète ou contenir des vidéos qui ne sont pas des clips ; ce sera affiné.</div>
         <div class="toolbar">
             <select id="fTypes"><option value="clip">Vrais clips</option><option value="autre">Autres vidéos (concerts, coulisses…)</option><option value="tous">Tout</option></select>
             <select id="fDeja"><option value="tous">Déjà là ou non</option><option value="manquants">Seulement ceux que je n’ai pas</option><option value="deja">Seulement ceux que j’ai</option></select>
-            <button class="btn ghost small" id="toutCocher">Tout cocher</button><button class="btn ghost small" id="toutDecocher">Tout décocher</button>
         </div>
         <details class="ajout" id="ajoutBloc"><summary>➕ Un clip manque ? L'ajouter avec son lien YouTube</summary>
             <div class="aide" style="margin:8px 0">Colle le lien de la vidéo officielle : MouFlip lit son titre, propose l'album et l'année, et l'ajoute à la liste (il y reste après chaque « Actualiser »).</div>
@@ -248,14 +257,16 @@ function dessiner() {
             <div id="ajoutForm"></div>
         </details>
         <div class="toolbar"><label class="red">📉 Taille des clips cochés : <select id="redTous"><option value="">— choisir —</option>${optionsReduction('')}</select></label></div>
-        <div class="toolbar"><button class="btn ghost" id="lireFormats">📊 Voir le meilleur format des clips cochés</button><button class="btn" id="telecharger">⬇️ Télécharger les clips cochés</button></div>
+        <div class="toolbar"><button class="btn ghost" id="lireFormats">📊 Voir le meilleur format des clips cochés</button></div>
         <div class="progress" id="prog"><div class="bar" id="progBar"></div><div class="txt" id="progTxt"></div></div>
         <div id="clips">${liste.map((c, i) => ligne(c, i)).join('') || '<div class="muted" style="padding:14px">Aucun clip dans cette vue.</div>'}</div>
     </div>`;
     $('fTypes').value = dessiner.t || 'clip'; $('fDeja').value = dessiner.d || 'tous';
     $('fTypes').onchange = $('fDeja').onchange = () => { dessiner.t = $('fTypes').value; dessiner.d = $('fDeja').value; dessiner(); };
-    $('toutCocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = true);
-    $('toutDecocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = false);
+    $('toutCocher').onclick = () => { document.querySelectorAll('.clip input[type=checkbox]').forEach(x => x.checked = true); majCoches(); };
+    $('toutDecocher').onclick = () => { document.querySelectorAll('.clip input[type=checkbox]').forEach(x => x.checked = false); majCoches(); };
+    $('clips').addEventListener('change', e => { if (e.target.type === 'checkbox') majCoches(); });
+    majCoches();
     if ($('actualiser')) $('actualiser').onclick = e => { e.preventDefault(); ouvrir(G.fiche.mbid, true); };
     document.querySelectorAll('[data-retirer-ajout]').forEach(a => a.onclick = async e => { e.preventDefault(); await post('/api/ajout/retirer', {mbid: G.fiche.mbid, titre: a.dataset.retirerAjout}); ouvrir(G.fiche.mbid); });
     document.querySelectorAll('[data-red]').forEach(sel => sel.onchange = () => choisirReduction([document.querySelectorAll('.clip')[Number(sel.dataset.red)].dataset.t], sel.value));
@@ -273,6 +284,12 @@ function dessiner() {
     $('telecharger').onclick = telechargerCoches;
     document.querySelectorAll('[data-voir]').forEach(b => b.onclick = () => voir(Number(b.dataset.voir), b));
     if ($('bioPlus')) $('bioPlus').onclick = e => { e.preventDefault(); $('bio').classList.toggle('ouverte'); };
+}
+function majCoches() {                                                  // « 3 clips cochés » + bouton Télécharger (n), toujours visibles pendant le défilement
+    const n = document.querySelectorAll('.clip input[type=checkbox]:checked').length, total = document.querySelectorAll('.clip').length;
+    $('nbCoches').innerHTML = `<b>${n}</b> clip${n > 1 ? 's' : ''} coché${n > 1 ? 's' : ''} sur ${total}`;
+    $('telecharger').textContent = n ? `⬇️ Télécharger (${n})` : '⬇️ Télécharger';
+    $('telecharger').disabled = !n;
 }
 function ligne(c, i) {
     return `<div class="clip" data-t="${esc(c.titre)}"><input type="checkbox" ${c.deja ? '' : 'checked'} aria-label="Choisir ce clip">
@@ -337,7 +354,7 @@ async function lireVersions(i, titre) {
         if (!VER[x.id]) { majVersions(i, titre); VER[x.id] = await post('/api/apercu/version', {video_id: x.id}); }
         majVersions(i, titre);
     }
-    const bv = document.querySelector('#voir' + i + ' [data-versions]'); if (bv) bv.textContent = '📊 Formats lus';
+    const bv = document.querySelector('#voir' + i + ' [data-versions]'); if (bv) bv.textContent = '📊 Comparaison faite';
 }
 const dur = s => s ? Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') : '';
 async function voir(i, bouton) {
@@ -360,14 +377,15 @@ function montrer(i, titre, id) {
         <div class="muted" style="margin:6px 0">${esc(cur.channel || '')} · « ${esc(cur.title)} » ${cur.duration ? '· ' + dur(cur.duration) : ''} · <a href="${esc(cur.url)}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>
         <div class="muted" style="margin-top:6px">${c.length > 1 ? 'Versions possibles' : 'Version trouvée'} :</div>
         <div class="alt">${c.map(x => `<button data-id="${esc(x.id)}" class="${x.id === cur.id ? 'cur' : ''}">${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}${VER[x.id] ? '<br><span class="muted">' + texteVersion(x.id) + '</span>' : ''}</button>`).join('')}</div>
-        <button class="btn small ghost" data-versions="1">📊 Format et taille de chaque version</button>
-        <button class="btn small ghost" data-qualites="1">📋 Toutes les qualités de cette vidéo</button>
+        ${c.length > 1 ? `<div class="aide" style="margin-top:4px">Ces ${c.length} vidéos sont différentes (autres chaînes ou autres mises en ligne). Compare leur qualité et leur taille pour choisir la meilleure.</div>
+        <button class="btn small ghost" data-versions="1">📊 Comparer ces ${c.length} vidéos (qualité et taille)</button>` : ''}
+        <button class="btn small ghost" data-qualites="1">📋 Choisir la qualité de cette vidéo (1080p, 1440p, 4K…)</button>
         <div id="qual${i}"></div>
         <button class="btn small" data-choisir="1">${V[titre] === cur.id ? '✅ Vidéo choisie' : '✅ C’est cette vidéo'}</button>`;
     zone.querySelector('.lecteur').onclick = e => { e.currentTarget.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(cur.id)}?autoplay=1&rel=0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; e.currentTarget.onclick = null; };
     zone.querySelectorAll('.alt button').forEach(b => b.onclick = () => montrer(i, titre, b.dataset.id));
     const bq = zone.querySelector('[data-qualites]'); if (bq) bq.onclick = () => qualites(i, titre, cur.id);
-    const bv = zone.querySelector('[data-versions]'); if (bv) bv.onclick = () => { bv.disabled = true; bv.textContent = 'Lecture des formats…'; lireVersions(i, titre); };
+    const bv = zone.querySelector('[data-versions]'); if (bv) bv.onclick = () => { bv.disabled = true; bv.textContent = 'Comparaison en cours…'; lireVersions(i, titre); };
     zone.querySelector('[data-choisir]').onclick = () => { V[titre] = cur.id; post('/api/choix', {mbid: G.fiche.mbid, titre, video_id: cur.id}); montrer(i, titre, cur.id); const p = document.querySelectorAll('.clip')[i].querySelector('.voir .btn'); if (p && !p.nextElementSibling.classList.contains('pill')) p.insertAdjacentHTML('afterend', ' <span class="pill ok">vidéo choisie</span>'); };
 }
 async function ajoutLire() {
