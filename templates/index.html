@@ -51,6 +51,18 @@
     .alt { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
     .alt button { text-align:left; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:.8rem; cursor:pointer; max-width:100%; }
     .alt button.cur { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 18%, var(--field)); }
+    /* barre des téléchargements : toujours visible en bas, la page reste défilable derrière ; un toucher déplie la liste */
+    #travaux { position:fixed; left:0; right:0; bottom:0; z-index:50; margin:0; padding:0; border-radius:12px 12px 0 0; box-shadow:0 -4px 18px rgba(0,0,0,.45); max-width:960px; margin-left:auto; margin-right:auto; }
+    #travaux[hidden] { display:none; }
+    #travaux .entete { display:flex; align-items:center; gap:10px; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); cursor:pointer; user-select:none; }
+    #travaux .entete .resume { flex:1; min-width:0; font-size:.88rem; }
+    #travaux .entete .resume b { color:var(--text); }
+    #travaux .entete .mini { height:5px; background:var(--field); border-radius:3px; margin-top:5px; overflow:hidden; }
+    #travaux .entete .mini i { display:block; height:100%; background:var(--accent); transition:width .4s; }
+    #travaux .fleche { font-size:1.1rem; color:var(--muted); transition:transform .2s; }
+    #travaux.ouvert .fleche { transform:rotate(180deg); }
+    #travaux .corps { display:none; max-height:55vh; overflow-y:auto; padding:0 14px 12px; border-top:1px solid var(--line); }
+    #travaux.ouvert .corps { display:block; }
     .job { border-top:1px solid var(--line); padding:10px 0; }
     .job .titre { font-weight:600; word-break:break-word; }
     .job .barre { height:6px; background:var(--field); border-radius:3px; margin:6px 0; overflow:hidden; }
@@ -79,9 +91,13 @@
     <div id="groupe" hidden></div>
 
     <div class="panel" id="travaux" hidden>
-        <h3 style="margin:0 0 4px">Téléchargements et rangement</h3>
-        <div class="muted">Le clip est d'abord préparé sur le serveur (meilleure qualité, volume réglé). Il n'entre dans « Video clip » que quand tu touches « Ranger ».</div>
-        <div id="travauxListe"></div>
+        <div class="entete" id="travauxEntete" role="button" tabindex="0" aria-label="Téléchargements et rangement : afficher ou masquer la liste">
+            <span>⬇️</span><div class="resume" id="travauxResume"></div><span class="fleche">▲</span>
+        </div>
+        <div class="corps">
+            <div class="muted" style="padding-top:8px">Le clip est d'abord préparé sur le serveur (meilleure qualité, volume réglé). Il n'entre dans « Video clip » que quand tu touches « Ranger ».</div>
+            <div id="travauxListe"></div>
+        </div>
     </div>
 </div>
 <script>
@@ -252,7 +268,7 @@ async function telechargerCoches() {
     note('Lancement…');
     const d = await post('/api/travaux', {mbid: G.fiche.mbid, clips});
     if (d.error) return note(d.error, 'err');
-    note(`${(d.travaux || []).length} clip(s) mis en file : suis l'avancement en bas de page.`);
+    note(`${(d.travaux || []).length} clip(s) mis en file : l'avancement est dans la barre en bas (touche-la pour la déplier).`);
     suivreTravaux();
 }
 let _timerTravaux = null;
@@ -261,13 +277,39 @@ async function suivreTravaux() {
     const d = await api('/api/travaux');
     const liste = d.travaux || [];
     $('travaux').hidden = !liste.length;
+    resumeTravaux(liste);
     $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
+    ajusterBas();
     document.querySelectorAll('[data-plan]').forEach(b => b.onclick = () => { const z = $('plan' + b.dataset.plan); z.hidden = !z.hidden; });
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
     document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
     document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
     if (liste.some(t => ['attente', 'telechargement', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
 }
+function resumeTravaux(liste) {
+    const actifs = liste.filter(t => ['attente', 'telechargement', 'audio'].includes(t.etat)), prets = liste.filter(t => t.etat === 'pret'),
+          erreurs = liste.filter(t => t.etat === 'erreur'), ranges = liste.filter(t => t.etat === 'range');
+    const enCours = actifs.find(t => t.etat !== 'attente') || actifs[0];
+    const morceaux = [];
+    if (actifs.length) morceaux.push(`<b>${actifs.length} en cours</b>`);
+    if (prets.length) morceaux.push(`<b>${prets.length} prêt${prets.length > 1 ? 's' : ''} à ranger</b>`);
+    if (erreurs.length) morceaux.push(`${erreurs.length} en erreur`);
+    if (ranges.length) morceaux.push(`${ranges.length} rangé${ranges.length > 1 ? 's' : ''}`);
+    $('travauxResume').innerHTML = morceaux.join(' · ') + (enCours ? `<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(enCours.titre)} : ${esc(enCours.message || '')}</div><div class="mini"><i style="width:${enCours.progres || 0}%"></i></div>` : '');
+    ajusterBas();
+}
+function ajusterBas() {                                                // la page garde de la place sous le contenu : rien n'est caché par la barre
+    document.body.style.paddingBottom = $('travaux').hidden ? '' : ($('travaux').offsetHeight + 16) + 'px';
+}
+function ouvrirTravaux(ouvert) {
+    $('travaux').classList.toggle('ouvert', ouvert);
+    try { localStorage.setItem('mouflipTravauxOuvert', ouvert ? '1' : '0'); } catch (e) {}
+    ajusterBas();
+}
+$('travauxEntete').addEventListener('click', () => ouvrirTravaux(!$('travaux').classList.contains('ouvert')));
+$('travauxEntete').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ouvrirTravaux(!$('travaux').classList.contains('ouvert')); } });
+try { if (localStorage.getItem('mouflipTravauxOuvert') === '1') $('travaux').classList.add('ouvert'); } catch (e) {}
+window.addEventListener('resize', ajusterBas);
 function carteTravail(t) {
     const actif = ['attente', 'telechargement', 'audio'].includes(t.etat);
     const pill = {attente: '<span class="pill">en attente</span>', telechargement: '<span class="pill warn">téléchargement</span>', audio: '<span class="pill warn">volume</span>',
