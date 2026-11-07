@@ -500,6 +500,41 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual([g["nom"] for g in r["groupes"]], ["ALI"])
         ch.assert_called_once()
 
+    def test_ajout_d_image_par_formulaire_et_apercu(self):
+        import io
+        from PIL import Image
+        def png():
+            t = io.BytesIO(); Image.new("RGB", (640, 640), (10, 120, 200)).save(t, "PNG"); return t.getvalue()
+        faux = {"id": "t1", "etat": "pret"}
+        with mock.patch.object(self.A.travaux, "ajouter_image", return_value=(faux, "")) as aj:
+            r = self.c.post("/api/travaux/t1/image", data={"type": "couverture", "fichier": (io.BytesIO(png()), "ma_pochette.png")}, content_type="multipart/form-data")
+        self.assertEqual((r.status_code, r.get_json()), (200, faux))
+        self.assertEqual(aj.call_args.args[1], "couverture")
+        self.assertTrue(aj.call_args.args[2].startswith(b"\x89PNG"))
+        # rien envoyé
+        self.assertEqual(self.c.post("/api/travaux/t1/image", data={"type": "logo"}, content_type="multipart/form-data").status_code, 400)
+        # une adresse du réseau local est refusée avant toute lecture
+        r = self.c.post("/api/travaux/t1/image", data={"type": "logo", "lien": "http://192.168.1.134:8096/x.png"}, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Internet", r.get_json()["error"])
+        # erreur renvoyée par le travail : transmise telle quelle
+        with mock.patch.object(self.A.travaux, "ajouter_image", return_value=(None, "Ce fichier n'est pas une image lisible")):
+            r = self.c.post("/api/travaux/t1/image", data={"type": "logo", "fichier": (io.BytesIO(b"abc"), "a.png")}, content_type="multipart/form-data")
+        self.assertEqual((r.status_code, "image lisible" in r.get_json()["error"]), (400, True))
+
+    def test_apercu_d_une_image_ajoutee(self):
+        from src import images_perso
+        images_perso.configurer(Path(self.tmp.name))
+        import io
+        from PIL import Image
+        t = io.BytesIO(); Image.new("RGB", (400, 400), (1, 2, 3)).save(t, "PNG")
+        e = images_perso.ajouter(self.MB, "couverture", t.getvalue(), "x", "album")
+        r = self.c.get(f"/api/perso/{self.MB}/{e['id']}")
+        self.assertEqual((r.status_code, r.data[:2]), (200, b"\xff\xd8"))                      # JPEG
+        self.assertEqual(self.c.get(f"/api/perso/{self.MB}/{'0' * 12}").status_code, 404)
+        self.assertEqual(self.c.get(f"/api/perso/{self.MB}/../../etc/passwd").status_code, 404)
+        images_perso.configurer(self.A.BASE_DIR / "data")
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)

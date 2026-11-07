@@ -189,6 +189,39 @@ def candidats_images(audiodb: dict, fanart: dict) -> dict:
     return sortie
 
 
+def couvertures_externes(rg: str, groupe: str, album: str) -> list[dict]:
+    """Pochettes de l'album trouvées ailleurs que chez fanart.tv : [{url, source}].
+    - Cover Art Archive (la banque d'images de MusicBrainz, par groupe de sorties) : images « Front » en grand format ;
+    - iTunes (recherche par artiste et album, l'album doit porter le même nom) : image en 1200 px.
+    Une panne d'une source est ignorée : ce sont des propositions en plus, jamais une obligation."""
+    sortie = []
+    if rg:
+        try:
+            d = _get(f"https://coverartarchive.org/release-group/{rg}") or {}
+            for im in d.get("images", []):
+                if im.get("front") or "Front" in (im.get("types") or []):
+                    url = (im.get("thumbnails") or {}).get("1200") or im.get("image")
+                    if url:
+                        sortie.append({"url": url.replace("http://", "https://", 1), "source": "Cover Art Archive"})
+        except SourceIndisponible:
+            pass
+    try:
+        d = _get("https://itunes.apple.com/search", {"term": f"{groupe} {album}", "entity": "album", "limit": 10}) or {}
+        voulu, artiste = normaliser(album), normaliser(groupe)
+        for r in d.get("results", []):
+            nom_album = normaliser(r.get("collectionName", ""))
+            if not (nom_album == voulu or nom_album.startswith(voulu + " ")):
+                continue
+            if artiste and artiste not in normaliser(r.get("artistName", "")) and normaliser(r.get("artistName", "")) not in artiste:
+                continue
+            url = (r.get("artworkUrl100") or "").replace("100x100bb", "1200x1200bb")
+            if url and url not in [x["url"] for x in sortie]:
+                sortie.append({"url": url, "source": "iTunes"})
+    except SourceIndisponible:
+        pass
+    return sortie
+
+
 def resume_wikipedia(titre: str, langue: str = "fr") -> str:
     d = _get(f"https://{langue}.wikipedia.org/api/rest_v1/page/summary/{quote(titre.replace(' ', '_'))}")
     return ((d or {}).get("extract") or "") if (d or {}).get("type") == "standard" else ""

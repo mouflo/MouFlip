@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from src import audio, formats, nfo, noms, rangement, telechargement
+from src import audio, formats, images_perso, nfo, noms, rangement, telechargement
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,42 @@ def _rg(c) -> str:
     return c.get("rg") or ""
 
 
+def _perso(c, type_) -> list[dict]:
+    """Les images ajoutées à la main pour ce type : [{url: « perso:<id> », source: « toi », apercu}]. Pochette et cdart : du même album seulement."""
+    mbid = c["contexte"].get("mbid", "")
+    return [{"url": f"perso:{e['id']}", "source": "toi", "apercu": f"/api/perso/{mbid}/{e['id']}"}
+            for e in images_perso.lister(mbid, type_, noms.normaliser(c["album"]) if type_ in ("couverture", "cdart") else "")]
+
+
+def _resoudre_url(c, url):
+    """« perso:<id> » devient le fichier local (« file://… ») ; une adresse d'Internet reste telle quelle."""
+    if isinstance(url, str) and url.startswith("perso:"):
+        p = images_perso.chemin(c["contexte"].get("mbid", ""), url[len("perso:"):])
+        return f"file://{p}" if p else ""
+    return url
+
+
+def _candidats(c, type_) -> list[dict]:
+    """Toutes les images proposées pour un type : les bases d'images, puis celles ajoutées à la main (en dernier : jamais choisies par défaut)."""
+    ctx = c["contexte"]
+    if type_ in ("vignette", "banniere", "logo", "fanart"):
+        base = list((ctx.get("candidats") or {}).get(type_) or [])
+    elif type_ == "couverture":
+        album = (ctx.get("images_album") or {}).get(_rg(c)) or {}
+        base = [{"url": u, "source": "fanart.tv"} for u in album.get("couverture_liste", [])]
+        if couvertures_fn:
+            try:
+                for x in couvertures_fn(_rg(c), c["groupe"], c["album"]):
+                    if x["url"] not in [b["url"] for b in base]:
+                        base.append(x)
+            except Exception:
+                pass
+    else:   # cdart
+        album = (ctx.get("images_album") or {}).get(_rg(c)) or {}
+        base = [{"url": u, "source": "fanart.tv"} for u in album.get("cdart_liste", [])]
+    return base + _perso(c, type_)
+
+
 def _dossiers(c):
     ctx = c["contexte"]
     racine = Path(_CFG["racine"]())
@@ -191,32 +227,35 @@ def _dossiers(c):
 
 
 def _images_effectives(c):
-    """(images du groupe, images de l'album, clés à remplacer) d'après les choix. None = « le premier de chaque type » ; "" = aucune ; une adresse =
-    celle-là. Une image DÉJÀ présente n'est remplacée que si l'utilisatrice a choisi une autre image (jamais par défaut)."""
+    """(images du groupe, images de l'album, clés à remplacer) d'après les choix. None = « le premier de chaque type » ; "" = aucune ; une adresse (ou
+    « perso:<id> » : une image ajoutée à la main) = celle-là. Une image DÉJÀ présente n'est remplacée que si l'utilisatrice a choisi une autre image."""
     ctx, choix = c["contexte"], c.get("choix") or {}
     _racine, groupe, dossier_album = _dossiers(c)
-    cands = ctx.get("candidats") or {}
     images, remplacer = {}, set()
     for t in TYPES_IMAGES:
         voulu = (choix.get("images") or {}).get(t)
-        premiere = ((cands.get(t) or [{}])[0].get("url")) or (ctx.get("images") or {}).get(t)
-        url = premiere if voulu is None else voulu
+        cands = _candidats(c, t)
+        premiere = (cands[0]["url"] if cands else None) or (ctx.get("images") or {}).get(t)
+        url = _resoudre_url(c, premiere if voulu is None else voulu)
         if url:
             images[t] = url
             if voulu and (groupe / NOMS_FICHIERS[t]).exists():
                 remplacer.add(t)
     fonds = (choix.get("images") or {}).get("fanart")
-    urls = [x["url"] for x in (cands.get("fanart") or [])[:4]] if fonds is None else list(fonds)
+    cands_f = _candidats(c, "fanart")
+    urls = [x["url"] for x in cands_f[:4]] if fonds is None else list(fonds)
     if not urls and fonds is None:
         urls = [u for k, u in (ctx.get("images") or {}).items() if k.startswith("fanart")]
     libres = [cle for cle in SLOTS_FANART if not (groupe / NOMS_FICHIERS[cle]).exists()]            # les fonds déjà là ne sont jamais remplacés
     for cle, u in zip(libres, urls):
-        images[cle] = u
-    album = (ctx.get("images_album") or {}).get(_rg(c)) or {}
+        r = _resoudre_url(c, u)
+        if r:
+            images[cle] = r
     images_album = {}
     for cle, fichier, nom_remp in (("couverture", "folder.jpg", "album_couverture"), ("cdart", "cdart.png", "album_cdart")):
         voulu = (choix.get("album") or {}).get(cle)
-        url = album.get(cle) if voulu is None else voulu
+        cands = _candidats(c, cle)
+        url = _resoudre_url(c, (cands[0]["url"] if cands else None) if voulu is None else voulu)
         if url:
             images_album[cle] = url
             if voulu and (dossier_album / fichier).exists():
@@ -379,6 +418,7 @@ def _existant(chemin: Path) -> dict:
 
 emby_artiste_fn = None          # app.py y branche la recherche d'artiste dans Emby (nom -> état)
 chaines_fn = None               # app.py y branche « quelles chaînes YouTube sont officielles pour ce groupe ? » (contexte -> ensemble d'identifiants)
+couvertures_fn = None           # app.py y branche « pochettes d'album trouvées ailleurs » (rg, groupe, album -> [{url, source}], mis en cache)
 rg_fn = None                    # app.py y branche « quel groupe de sorties (album) pour ce clip ? » (contexte, titre, album -> id)
 
 
@@ -389,10 +429,8 @@ def fiche(tid) -> dict | None:
         return None
     ctx, choix = c["contexte"], c.get("choix") or {}
     racine, groupe, dossier_album = _dossiers(c)
-    cands = ctx.get("candidats") or {}
     images, images_album, remplacer = _images_effectives(c)
     plan = construire_plan(c)
-    album = (ctx.get("images_album") or {}).get(_rg(c)) or {}
 
     def bloc(type_, nom_fichier, dossier, candidats, choisi, actuelle_remplacee):
         return {"type": type_, "fichier": nom_fichier, "existant": _existant(Path(dossier) / nom_fichier), "candidats": candidats, "choisi": choisi,
@@ -400,12 +438,10 @@ def fiche(tid) -> dict | None:
 
     groupe_images = {}
     for t in TYPES_IMAGES:
-        groupe_images[t] = bloc(t, NOMS_FICHIERS[t], groupe, cands.get(t) or [], (choix.get("images") or {}).get(t), t in remplacer)
+        groupe_images[t] = bloc(t, NOMS_FICHIERS[t], groupe, _candidats(c, t), (choix.get("images") or {}).get(t), t in remplacer)
     fonds_existants = [{"fichier": NOMS_FICHIERS[cle], **_existant(groupe / NOMS_FICHIERS[cle])} for cle in SLOTS_FANART]
-    albums = {"couverture": bloc("couverture", "folder.jpg", dossier_album, [{"url": u, "source": "fanart.tv"} for u in album.get("couverture_liste", [])],
-                                 (choix.get("album") or {}).get("couverture"), "album_couverture" in remplacer),
-              "cdart": bloc("cdart", "cdart.png", dossier_album, [{"url": u, "source": "fanart.tv"} for u in album.get("cdart_liste", [])],
-                            (choix.get("album") or {}).get("cdart"), "album_cdart" in remplacer)}
+    albums = {"couverture": bloc("couverture", "folder.jpg", dossier_album, _candidats(c, "couverture"), (choix.get("album") or {}).get("couverture"), "album_couverture" in remplacer),
+              "cdart": bloc("cdart", "cdart.png", dossier_album, _candidats(c, "cdart"), (choix.get("album") or {}).get("cdart"), "album_cdart" in remplacer)}
     s = c.get("sonde") or {}
     v, a = s.get("video") or {}, s.get("audio") or {}
     bio = ctx.get("biographie", "") if choix.get("biographie") is None else choix["biographie"]
@@ -425,7 +461,7 @@ def fiche(tid) -> dict | None:
                    "genre": ctx.get("genre", ""), "biographie": bio, "biographie_defaut": ctx.get("biographie", ""),
                    "biographie_langue": ctx.get("biographie_langue", ""), "dossier": str(groupe), "dossier_existe": groupe.exists(),
                    "artist_nfo_existe": (groupe / "artist.nfo").exists(), "images": groupe_images, "fanart": {
-                       "candidats": cands.get("fanart") or [], "choisis": choix.get("images", {}).get("fanart"), "existants": fonds_existants,
+                       "candidats": _candidats(c, "fanart"), "choisis": choix.get("images", {}).get("fanart"), "existants": fonds_existants,
                        "libres": sum(1 for f in fonds_existants if not f["present"])}},
         "album": albums,
         "emby_artiste": emby_artiste_fn(nom_artiste(c)) if emby_artiste_fn else None, "artiste": nom_artiste(c),
@@ -434,11 +470,25 @@ def fiche(tid) -> dict | None:
 
 
 def _urls_permises(c) -> set:
-    ctx = c["contexte"]
-    ok = {x["url"] for lst in (ctx.get("candidats") or {}).values() for x in lst}
-    for a in (ctx.get("images_album") or {}).values():
-        ok |= set(a.get("couverture_liste", [])) | set(a.get("cdart_liste", []))
+    """Toutes les images PROPOSÉES (jamais une adresse libre) : bases d'images, autres banques de pochettes, images ajoutées à la main."""
+    ok = set()
+    for t in ("vignette", "banniere", "logo", "fanart", "couverture", "cdart"):
+        ok |= {x["url"] for x in _candidats(c, t)}
     return ok
+
+
+def _memoriser_choix(c):
+    """Les choix d'images du groupe (pas l'album : sa pochette est propre à chaque album) sont réutilisés pour ses autres clips."""
+    memo = {}
+    try:
+        memo = json.loads(_fichier_choix().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    choix = c.get("choix") or {}
+    memo[c["contexte"].get("mbid", "")] = {"images": choix.get("images", {}), "artiste": choix.get("artiste")}
+    tmp = _fichier_choix().with_suffix(".tmp")
+    tmp.write_text(json.dumps(memo, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, _fichier_choix())
 
 
 def enregistrer_choix(tid, donnees: dict):
@@ -484,15 +534,7 @@ def enregistrer_choix(tid, donnees: dict):
             return None, "Poster inconnu."
         choix["poster"] = donnees["poster"]
     c["poster"] = _chemin_poster(c)
-    memo = {}
-    try:
-        memo = json.loads(_fichier_choix().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        pass
-    memo[c["contexte"].get("mbid", "")] = {"images": choix["images"], "artiste": choix.get("artiste")}      # pas l'album : sa pochette est propre à chaque album        # réutilisés pour les autres clips du groupe
-    tmp = _fichier_choix().with_suffix(".tmp")
-    tmp.write_text(json.dumps(memo, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, _fichier_choix())
+    _memoriser_choix(c)
     c["plan"] = [{k: v for k, v in l.items() if k not in ("contenu",)} for l in construire_plan(c)]
     _maj(c)
     return fiche(tid), ""
@@ -505,3 +547,48 @@ def fichier_poster(tid, pid) -> str:
         if p["id"] == pid and Path(p["fichier"]).is_file():
             return p["fichier"]
     return ""
+
+
+def ajouter_image(tid, type_, octets: bytes, nom: str = ""):
+    """Ajoute une image envoyée (ou lue depuis une adresse) et la CHOISIT. Retourne (fiche, erreur). Le poster reste propre au clip ; les autres types sont
+    gardés pour l'artiste (la pochette et le cdart pour l'album) et resservent aux clips suivants."""
+    with _VERROU:
+        c = TRAVAUX.get(tid)
+    if not c or c["etat"] != "pret":
+        return None, "Ce clip n'est pas prêt."
+    if type_ not in images_perso.TYPES:
+        return None, "Type d'image inconnu."
+    try:
+        if type_ == "poster":
+            contenu, ext = images_perso.preparer(type_, octets)
+            dossier = _CFG["dossier"] / c["id"]
+            dossier.mkdir(parents=True, exist_ok=True)
+            pid = f"perso{len([p for p in c.get('posters') or [] if p['id'].startswith('perso')]) + 1}"
+            fichier = dossier / f"poster_{pid}.{ext}"
+            fichier.write_bytes(contenu)
+            c.setdefault("posters", []).append({"id": pid, "label": "Image ajoutée par toi", "fichier": str(fichier)})
+            c.setdefault("choix", _choix_par_defaut(c["contexte"]))["poster"] = pid
+            c["poster"] = _chemin_poster(c)
+            _maj(c)
+            return fiche(tid), ""
+        entree = images_perso.ajouter(c["contexte"].get("mbid", ""), type_, octets, nom, noms.normaliser(c["album"]))
+    except images_perso.ImageError as e:
+        return None, str(e)
+    url = f"perso:{entree['id']}"
+    choix = c.setdefault("choix", _choix_par_defaut(c["contexte"]))
+    if type_ in TYPES_IMAGES:
+        choix["images"][type_] = url
+    elif type_ in ("couverture", "cdart"):
+        choix["album"][type_] = url
+    elif type_ == "fanart":
+        _racine, groupe, _a = _dossiers(c)
+        libres = sum(1 for cle in SLOTS_FANART if not (groupe / NOMS_FICHIERS[cle]).exists())
+        if libres == 0:
+            return None, "Les fonds d'écran existent déjà dans le dossier du groupe : ils ne sont jamais remplacés."
+        actuels = choix["images"].get("fanart")
+        actuels = [x["url"] for x in _candidats(c, "fanart")[:libres] if x["url"] != url] if actuels is None else [u for u in actuels if u != url]
+        choix["images"]["fanart"] = ([url] + actuels)[:libres]                       # la nouvelle prend la première place libre
+    _memoriser_choix(c)                                                              # retenue pour les autres clips du groupe
+    c["plan"] = [{k: v for k, v in l.items() if k not in ("contenu",)} for l in construire_plan(c)]
+    _maj(c)
+    return fiche(tid), ""

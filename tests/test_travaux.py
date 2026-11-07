@@ -11,7 +11,19 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import audio, nfo, rangement, sources, telechargement, travaux  # noqa: E402
+from src import audio, images_perso, nfo, rangement, sources, telechargement, travaux  # noqa: E402
+
+
+def setUpModule():
+    travaux.couvertures_fn = None            # jamais de vraie requête (Cover Art Archive, iTunes) dans ces tests, même si l'appli a été importée avant
+
+
+def png_octets(largeur=600, hauteur=600, couleur=(200, 30, 30, 255), mode="RGBA", fmt="PNG"):
+    import io
+    from PIL import Image
+    tampon = io.BytesIO()
+    Image.new(mode, (largeur, hauteur), couleur if mode == "RGBA" else couleur[:3]).save(tampon, fmt)
+    return tampon.getvalue()
 
 
 def faire_video(chemin, db_volume=0, duree=3):
@@ -394,9 +406,170 @@ class FicheTest(unittest.TestCase):
         self.assertEqual(c["rg"], "rg1")
         self.assertEqual(len(f["album"]["couverture"]["candidats"]), 2)
 
+    def test_pochette_ajoutee_a_la_main_choisie_et_rangee(self):
+        """Cas « Rich Man » : aucune pochette trouvée, l'utilisatrice envoie la sienne depuis son téléphone."""
+        images_perso.configurer(self.tmp / "data")
+        travaux.TRAVAUX[self.tid]["rg"] = ""
+        f = travaux.fiche(self.tid)
+        self.assertEqual(f["album"]["couverture"]["candidats"], [])                                # aucune pochette trouvée nulle part
+        f, err = travaux.ajouter_image(self.tid, "couverture", png_octets(800, 800), "ma_pochette.png")
+        self.assertEqual(err, "")
+        cand = f["album"]["couverture"]["candidats"][-1]
+        self.assertEqual((cand["source"], cand["url"].startswith("perso:")), ("toi", True))
+        self.assertTrue(cand["apercu"].startswith(f"/api/perso/{self.ctx['mbid']}/"))
+        self.assertEqual(f["album"]["couverture"]["choisi"], cand["url"])                         # elle est choisie tout de suite
+        ligne = {l.get("cle"): l for l in f["plan"]}["album_couverture"]
+        self.assertTrue(ligne["source"].endswith(".jpg"))                                         # copiée depuis le fichier local, rien à télécharger
+        with mock.patch.object(rangement.requests, "get", return_value=mock.Mock(status_code=200, content=b"IMG")):          # les AUTRES images viennent d'Internet (simulé)
+            r = travaux.ranger(self.tid)
+        self.assertTrue(r["ok"], r)
+        pochette = self.racine / "aespa/LEMONADE/folder.jpg"
+        self.assertTrue(pochette.exists())
+        from PIL import Image
+        self.assertEqual(Image.open(pochette).size, (800, 800))
+
+    def test_pochette_ajoutee_remplace_l_existante_avec_sauvegarde(self):
+        images_perso.configurer(self.tmp / "data")
+        dossier = self.racine / "aespa" / "LEMONADE"
+        dossier.mkdir(parents=True)
+        (dossier / "folder.jpg").write_bytes(b"ANCIENNE")
+        travaux.ajouter_image(self.tid, "couverture", png_octets(700, 700), "neuve.png")
+        with mock.patch.object(rangement.requests, "get", return_value=mock.Mock(status_code=200, content=b"IMG")):
+            r = travaux.ranger(self.tid)
+        self.assertTrue(r["ok"], r)
+        self.assertNotEqual((dossier / "folder.jpg").read_bytes(), b"ANCIENNE")
+        sauv = list((self.tmp / "data" / "sauvegardes").rglob("*folder.jpg"))
+        self.assertEqual([x.read_bytes() for x in sauv], [b"ANCIENNE"])                          # l'ancienne est sauvegardée avant d'être remplacée
+
+    def test_les_images_ajoutees_resservent_aux_autres_clips_de_l_artiste(self):
+        images_perso.configurer(self.tmp / "data")
+        travaux.ajouter_image(self.tid, "logo", png_octets(600, 200), "logo.png")
+        c2 = travaux.ajouter(self.ctx, {"titre": "Supernova", "album": "Armageddon", "video_id": "abcdefghijk"})
+        self.assertTrue(travaux.TRAVAUX[c2["id"]]["choix"]["images"]["logo"].startswith("perso:"))        # choix du groupe réutilisé
+        self.assertEqual(len([x for x in travaux._candidats(travaux.TRAVAUX[c2["id"]], "logo") if x["source"] == "toi"]), 1)
+        self.assertEqual([x for x in travaux._candidats(travaux.TRAVAUX[c2["id"]], "couverture") if x["source"] == "toi"], [])      # pas de pochette d'un autre album
+
+    def test_fond_d_ecran_ajoute_prend_la_premiere_place_libre(self):
+        images_perso.configurer(self.tmp / "data")
+        f, err = travaux.ajouter_image(self.tid, "fanart", png_octets(1280, 720, mode="RGB"), "fond.jpg")
+        self.assertEqual(err, "")
+        choisis = f["groupe"]["fanart"]["choisis"]
+        self.assertTrue(choisis[0].startswith("perso:"))
+        self.assertEqual(len(choisis), 4)                                                         # 4 places libres : la nouvelle + 3 propositions
+        plan = {l.get("cle"): l for l in f["plan"]}
+        self.assertTrue(plan["fanart"]["source"].endswith(".jpg"))
+
+    def test_fond_d_ecran_refuse_quand_les_places_sont_prises(self):
+        images_perso.configurer(self.tmp / "data")
+        g = self.racine / "aespa"
+        (g / "extrafanart").mkdir(parents=True)
+        for nom in ("fanart.jpg", "extrafanart/fanart1.jpg", "extrafanart/fanart2.jpg", "extrafanart/fanart3.jpg"):
+            (g / nom).write_bytes(b"x")
+        travaux.TRAVAUX[self.tid]["contexte"]["dossier_groupe"] = str(g)
+        f, err = travaux.ajouter_image(self.tid, "fanart", png_octets(1280, 720, mode="RGB"), "fond.jpg")
+        self.assertIsNone(f)
+        self.assertIn("jamais remplacés", err)
+
+    def test_poster_ajoute_est_propre_a_ce_clip(self):
+        images_perso.configurer(self.tmp / "data")
+        f, err = travaux.ajouter_image(self.tid, "poster", png_octets(1280, 720, mode="RGB"), "poster.jpg")
+        self.assertEqual(err, "")
+        self.assertEqual(f["clip"]["poster_choisi"], "perso1")
+        self.assertIn("perso1", [p["id"] for p in f["clip"]["posters"]])
+        self.assertTrue(travaux.fichier_poster(self.tid, "perso1"))
+        c2 = travaux.ajouter(self.ctx, {"titre": "Autre", "album": "A", "video_id": "abcdefghijk"})
+        self.assertEqual(travaux.TRAVAUX[c2["id"]].get("posters"), None)                          # un autre clip ne voit pas ce poster
+
+    def test_image_invalide_refusee_sans_rien_changer(self):
+        images_perso.configurer(self.tmp / "data")
+        avant = json.dumps(travaux.TRAVAUX[self.tid]["choix"], sort_keys=True)
+        f, err = travaux.ajouter_image(self.tid, "logo", b"pas une image", "x.png")
+        self.assertIsNone(f)
+        self.assertIn("pas une image", err)
+        self.assertEqual(json.dumps(travaux.TRAVAUX[self.tid]["choix"], sort_keys=True), avant)
+
+    def test_pochettes_d_autres_banques_proposees_et_permises(self):
+        travaux.couvertures_fn = lambda rg, groupe, album: [{"url": "https://coverartarchive.org/x-1200.jpg", "source": "Cover Art Archive"},
+                                                           {"url": "https://is1.mzstatic.com/y/1200x1200bb.jpg", "source": "iTunes"}]
+        try:
+            f = travaux.fiche(self.tid)
+            sources_c = [x["source"] for x in f["album"]["couverture"]["candidats"]]
+            self.assertEqual(sources_c, ["fanart.tv", "fanart.tv", "Cover Art Archive", "iTunes"])
+            f2, err = travaux.enregistrer_choix(self.tid, {"album": {"couverture": "https://is1.mzstatic.com/y/1200x1200bb.jpg"}})
+            self.assertEqual(err, "")                                                              # choisissable : elle a été proposée
+            self.assertIsNone(travaux.enregistrer_choix(self.tid, {"album": {"couverture": "https://pirate.example/x.jpg"}})[0])
+        finally:
+            travaux.couvertures_fn = None
+
     def test_fiche_d_un_clip_pas_pret(self):
         c = travaux.ajouter(self.ctx, {"titre": "Autre", "album": "Autre", "video_id": "abcdefghijk"})
         self.assertIsNone(travaux.fiche(c["id"]))
+
+
+class ImagesPersoTest(unittest.TestCase):
+    MB = "e7385b1f-6356-45e0-ae5e-f690f19ec508"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        images_perso.configurer(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_png_devient_jpeg_et_le_logo_reste_png_transparent(self):
+        from PIL import Image
+        e = images_perso.ajouter(self.MB, "couverture", png_octets(700, 700), "pochette.png", "rich man")
+        self.assertTrue(e["fichier"].endswith(".jpg"))
+        self.assertEqual(Image.open(images_perso.chemin(self.MB, e["id"])).format, "JPEG")
+        l = images_perso.ajouter(self.MB, "logo", png_octets(600, 200, (255, 255, 255, 0)), "logo.png")
+        im = Image.open(images_perso.chemin(self.MB, l["id"]))
+        self.assertEqual((im.format, im.mode), ("PNG", "RGBA"))                      # le logo garde sa transparence
+        self.assertEqual(im.getpixel((10, 10))[3], 0)
+
+    def test_refus_en_clair(self):
+        for octets, mot in ((b"pas une image du tout", "pas une image"), (png_octets(50, 50), "trop petite"), (b"", "vide")):
+            with self.assertRaises(images_perso.ImageError) as e:
+                images_perso.ajouter(self.MB, "couverture", octets)
+            self.assertIn(mot, str(e.exception))
+        with self.assertRaises(images_perso.ImageError):
+            images_perso.ajouter(self.MB, "inconnu", png_octets())
+        with self.assertRaises(images_perso.ImageError) as e:
+            images_perso.ajouter(self.MB, "couverture", b"x" * (images_perso.MAX_OCTETS + 1))
+        self.assertIn("trop grosse", str(e.exception))
+
+    def test_trop_grande_image_reduite(self):
+        from PIL import Image
+        e = images_perso.ajouter(self.MB, "fanart", png_octets(5200, 2900, mode="RGB"))
+        self.assertLessEqual(max(Image.open(images_perso.chemin(self.MB, e["id"])).size), images_perso.MAX_COTE)
+
+    def test_pochette_propre_a_son_album_les_autres_types_a_l_artiste(self):
+        a = images_perso.ajouter(self.MB, "couverture", png_octets(), "a", "rich man")
+        images_perso.ajouter(self.MB, "logo", png_octets(600, 200), "l")
+        self.assertEqual([e["id"] for e in images_perso.lister(self.MB, "couverture", "rich man")], [a["id"]])
+        self.assertEqual(images_perso.lister(self.MB, "couverture", "autre album"), [])          # la pochette d'un album n'est pas proposée à un autre
+        self.assertEqual(len(images_perso.lister(self.MB, "logo")), 1)
+
+    def test_adresses_du_reseau_local_refusees(self):
+        for url in ("http://127.0.0.1/x.png", "http://192.168.1.134:8096/emby.png", "http://10.0.0.5/a.jpg", "ftp://exemple.fr/x.png", "file:///etc/passwd", "pas une adresse"):
+            with self.assertRaises(images_perso.ImageError):
+                images_perso.telecharger(url)
+
+    def test_redirection_vers_le_reseau_local_refusee(self):
+        faux = mock.MagicMock(status_code=302, headers={"Location": "http://192.168.1.134:8096/secret.png"})
+        faux.__enter__.return_value = faux
+        with mock.patch.object(images_perso, "_hote_public", side_effect=[None, images_perso.ImageError("réseau local")]), \
+                mock.patch.object(images_perso.requests, "get", return_value=faux):
+            with self.assertRaises(images_perso.ImageError):
+                images_perso.telecharger("https://exemple.fr/redirige.png")
+
+    def test_telechargement_d_une_adresse_publique(self):
+        faux = mock.MagicMock(status_code=200)
+        faux.__enter__.return_value = faux
+        faux.iter_content.return_value = [png_octets(300, 300)]
+        with mock.patch.object(images_perso, "_hote_public"), mock.patch.object(images_perso.requests, "get", return_value=faux):
+            octets, nom = images_perso.telecharger("https://exemple.fr/dossier/pochette.png")
+        self.assertEqual(nom, "pochette.png")
+        self.assertTrue(octets.startswith(b"\x89PNG"))
 
 
 class QualitesTest(unittest.TestCase):
@@ -407,6 +580,24 @@ class QualitesTest(unittest.TestCase):
 
     def test_options_utilisent_le_format_choisi(self):
         self.assertIn("137+ba", telechargement.options(Path("/tmp/x"), None, "137")["format"])
+
+
+class CouverturesExternesTest(unittest.TestCase):
+    def test_cover_art_archive_et_itunes(self):
+        def faux(url, params=None, max_essais=5):
+            if "coverartarchive" in url:
+                return {"images": [{"front": False, "types": ["Back"], "image": "http://x/back.jpg"},
+                                   {"front": True, "types": ["Front"], "image": "http://x/front.jpg", "thumbnails": {"1200": "http://x/front-1200.jpg"}}]}
+            return {"results": [{"collectionName": "Rich Man - The 6th Mini Album - EP", "artistName": "aespa", "artworkUrl100": "https://m/a/100x100bb.jpg"},
+                                {"collectionName": "Next Level - Single", "artistName": "aespa", "artworkUrl100": "https://m/b/100x100bb.jpg"},
+                                {"collectionName": "Rich Man - Tribute", "artistName": "Un autre", "artworkUrl100": "https://m/c/100x100bb.jpg"}]}
+        with mock.patch.object(sources, "_get", side_effect=faux):
+            r = sources.couvertures_externes("rg1", "aespa", "Rich Man")
+        self.assertEqual([(x["source"], x["url"]) for x in r], [("Cover Art Archive", "https://x/front-1200.jpg"), ("iTunes", "https://m/a/1200x1200bb.jpg")])
+
+    def test_une_panne_n_empeche_rien(self):
+        with mock.patch.object(sources, "_get", side_effect=sources.SourceIndisponible("down")):
+            self.assertEqual(sources.couvertures_externes("rg1", "aespa", "Rich Man"), [])
 
 
 class FanartTest(unittest.TestCase):

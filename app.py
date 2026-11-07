@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import audio, chaines, emby_artistes, existants, formats, noms, sources, telechargement, travaux, ytcookies
+from src import audio, chaines, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -46,6 +46,7 @@ def _version() -> str:
 
 APP_VERSION = _version()
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024        # une image envoyée depuis le téléphone : 15 Mo au plus (la marge couvre l'enveloppe du formulaire)
 
 
 @app.before_request
@@ -366,6 +367,20 @@ def _resoudre_rg(ctx: dict, titre: str, album: str) -> str:
     return next((rg for rg in memes if images.get(rg)), memes[0] if memes else "")
 
 
+def _couvertures(rg: str, groupe: str, album: str) -> list:
+    """Pochettes d'ailleurs (Cover Art Archive, iTunes) : une requête par album, gardée 7 jours (même si elle ne trouve rien)."""
+    cle = f"{rg}|{noms.normaliser(groupe)}|{noms.normaliser(album)}"
+    fichier = CACHE_DIR / "couvertures.json"
+    d = _lire_json(fichier) or {}
+    if cle in d and time.time() - d[cle]["date"] < 7 * 24 * 3600:
+        return d[cle]["images"]
+    images = sources.couvertures_externes(rg, groupe, album)
+    d[cle] = {"date": time.time(), "images": images}
+    _ecrire_json(fichier, d)
+    return images
+
+
+travaux.couvertures_fn = _couvertures
 travaux.rg_fn = _resoudre_rg
 travaux.chaines_fn = lambda ctx: _ids_chaines(ctx.get("mbid", ""))
 
@@ -518,6 +533,35 @@ def api_chaines_retirer():
 def api_travaux_fiche(tid):
     f = travaux.fiche(tid)
     return (jsonify(f), 200) if f else (jsonify({"error": "Ce clip n'est pas prêt : sa fiche n'existe pas encore."}), 404)
+
+
+@app.route("/api/travaux/<tid>/image", methods=["POST"])
+def api_travaux_image(tid):
+    """Ajoute à la main une image pour la fiche (fichier envoyé, ou adresse d'une image) : pochette, cdart, logo, vignette, bannière, fond d'écran, poster.
+    Elle est vérifiée, remise au bon format et CHOISIE ; la fiche mise à jour est renvoyée."""
+    type_ = str(request.form.get("type", ""))
+    envoye = request.files.get("fichier")
+    try:
+        if envoye and envoye.filename:
+            octets, nom = envoye.read(images_perso.MAX_OCTETS + 1), envoye.filename
+        elif request.form.get("lien", "").strip():
+            octets, nom = images_perso.telecharger(request.form["lien"])
+        else:
+            return jsonify({"error": "Choisis un fichier ou colle l'adresse d'une image."}), 400
+    except images_perso.ImageError as e:
+        return jsonify({"error": str(e)}), 400
+    f, err = travaux.ajouter_image(tid, type_, octets, nom)
+    return (jsonify(f), 200) if f else (jsonify({"error": err}), 400)
+
+
+@app.route("/api/perso/<mbid>/<image_id>")
+def api_perso(mbid, image_id):
+    """Montre une image ajoutée à la main (pour la choisir dans la fiche)."""
+    from flask import send_file
+    p = images_perso.chemin(mbid, image_id) if re.fullmatch(r"[0-9a-f-]{36}", mbid) and re.fullmatch(r"[0-9a-f]{12}", image_id) else None
+    if not p:
+        return jsonify({"error": "Image introuvable."}), 404
+    return send_file(p, max_age=60)
 
 
 @app.route("/api/travaux/<tid>/choix", methods=["POST"])
@@ -952,6 +996,7 @@ import redemarrage
 redemarrage.init_app(app, BASE_DIR)
 import redemarrer
 redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe())
+images_perso.configurer(BASE_DIR / "data")
 travaux.emby_artiste_fn = lambda nom: emby_artistes.chercher(EMBY, nom)
 travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"], lambda: REDUCTION, ecriture=False)
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")

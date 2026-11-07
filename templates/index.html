@@ -90,6 +90,11 @@
     .fi-plan { list-style:none; margin:6px 0 0; padding:0; font-size:.8rem; }
     .fi-plan li { padding:4px 0; border-top:1px solid var(--line); word-break:break-all; color:var(--muted); }
     .fi-plan li b { color:var(--text); font-weight:600; }
+    .fi-msg { position:fixed; left:12px; right:12px; bottom:96px; z-index:120; padding:10px 14px; border-radius:8px; background:#233a24; color:#e6f5e4; box-shadow:0 4px 16px rgba(0,0,0,.5); font-size:.9rem; }
+    .fi-msg.err { background:#4a2323; color:#fbe3e3; } .fi-msg.warn { background:#4a3d1e; color:#fbefd0; }
+    .ajout-img { display:flex; flex-wrap:wrap; gap:8px; margin:2px 0 10px; }
+    .ajout-img .btn { flex:1 1 auto; }
+    #fiche .vign .src.toi { background:#4a3d1e; color:#fbefd0; }
     .fi-barre { position:fixed; left:0; right:0; bottom:0; z-index:110; background:var(--card); border-top:1px solid var(--line); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; box-shadow:0 -4px 18px rgba(0,0,0,.45); }
     .fi-barre .resume { flex:1; min-width:0; font-size:.78rem; color:var(--muted); }
     .fi-barre .btn { padding:11px 14px; }
@@ -170,6 +175,8 @@
 
     <div id="fiche" role="dialog" aria-modal="true" aria-label="Fiche du clip">
         <div id="ficheCorps"></div>
+        <div class="fi-msg" id="ficheMsg" hidden></div>
+        <input type="file" id="fichierImg" accept="image/*" hidden>
         <div class="fi-barre"><div class="resume" id="ficheResume"></div><button class="btn ghost" id="ficheFermer">Fermer</button><button class="btn" id="ficheRanger">📁 Ranger dans Video clip</button></div>
     </div>
 
@@ -554,12 +561,20 @@ let FI = null;
 const urlPoster = (id, pid) => '/api/travaux/' + id + '/poster/' + pid;
 const urlExistant = chemin => '/api/existant?chemin=' + encodeURIComponent(chemin);
 const dureeMin = s => s ? Math.floor(s / 60) + ' min ' + String(Math.round(s % 60)).padStart(2, '0') + ' s' : '';
+let _timerMsg = null;
+function noteFiche(texte, genre) {                                      // message visible par-dessus la fiche, qui disparaît seul
+    const m = $('ficheMsg'); m.textContent = texte; m.className = 'fi-msg ' + (genre || ''); m.hidden = !texte;
+    clearTimeout(_timerMsg); if (texte) _timerMsg = setTimeout(() => { m.hidden = true; }, genre === 'err' ? 9000 : 4500);
+}
 function etiquette(source) {                                          // « fanart.tv » / « TheAudioDB » en étiquette colorée
-    const cls = source === 'TheAudioDB' ? 'audiodb' : source === 'vidéo' ? 'video' : '';
+    const cls = source === 'TheAudioDB' ? 'audiodb' : source === 'vidéo' ? 'video' : source === 'toi' ? 'toi' : '';
     return `<span class="src ${cls}">${esc(source)}</span>`;
 }
 function vign(classe, url, legende, sel, attrs) {
     return `<button type="button" class="vign ${classe}${sel ? ' sel' : ''}" ${attrs || ''}><img loading="lazy" referrerpolicy="no-referrer" src="${esc(url)}" alt="" onload="var d=this.parentNode.querySelector('.dim');if(d)d.textContent=this.naturalWidth+' × '+this.naturalHeight+' px'"><span class="coche">✓</span><small>${legende}<span class="dim"></span></small></button>`;
+}
+function tuilesAjout(type) {                                          // sous chaque rangée d'images : « 📁 Ajouter un fichier » (galerie du téléphone) et « 🔗 Ajouter une adresse »
+    return `<div class="ajout-img"><button type="button" class="btn small ghost" data-ajout-fichier="${type}">📁 Ajouter un fichier</button><button type="button" class="btn small ghost" data-ajout-lien="${type}">🔗 Ajouter une adresse</button></div>`;
 }
 function bandeImages(typeCss, bloc, cle) {
     // une image du groupe ou de l'album : « actuelle » (déjà dans Emby), les propositions, « aucune »
@@ -569,11 +584,11 @@ function bandeImages(typeCss, bloc, cle) {
     if (ex) t += vign(typeCss + ' actuelle', urlExistant(bloc.existant.chemin), '<span class="actu">✔ Actuelle</span> · déjà dans Emby, gardée', defautActuelle, `data-cle="${cle}" data-url="__garder__"`);
     bloc.candidats.forEach((c, i) => {
         const sel = ch === c.url || (ch === null && !ex && i === 0);
-        t += vign(typeCss, c.url, etiquette(c.source) + (ex && sel ? ' <span class="remp">♻ remplacera l’actuelle</span>' : ''), sel, `data-cle="${cle}" data-url="${esc(c.url)}"`);
+        t += vign(typeCss, c.apercu || c.url, etiquette(c.source) + (ex && sel ? ' <span class="remp">♻ remplacera l’actuelle</span>' : ''), sel, `data-cle="${cle}" data-url="${esc(c.url)}"`);
     });
     if (!bloc.candidats.length && !ex) t += '<div class="muted" style="padding:10px">Aucune image trouvée.</div>';
     t += `<button type="button" class="vign aucune${ch === '' ? ' sel' : ''}" data-cle="${cle}" data-url="">Aucune<span class="coche">✓</span></button>`;
-    return `<div class="bande">${t}</div>`;
+    return `<div class="bande">${t}</div>` + tuilesAjout(cle.startsWith('album_') ? cle.slice(6) : cle);
 }
 function blocEmby(f) {
     const e = f.emby_artiste, nom = f.artiste;
@@ -596,7 +611,8 @@ function rendreFiche() {
     // fonds d'écran : emplacements déjà occupés + propositions à cocher pour les places libres
     const choisisFonds = g.fanart.choisis === null ? g.fanart.candidats.slice(0, g.fanart.libres).map(x => x.url) : g.fanart.choisis;
     const fonds = g.fanart.existants.filter(x => x.present).map(x => vign('fond fixe', urlExistant(x.chemin), '<span class="actu">✔ Déjà dans Emby</span> · ' + esc(x.fichier), false, 'disabled'))
-        .concat(g.fanart.candidats.map(x => vign('fond', x.url, etiquette(x.source), choisisFonds.includes(x.url), `data-fond="${esc(x.url)}"`))).join('');
+        .concat(g.fanart.candidats.map(x => vign('fond', x.apercu || x.url, etiquette(x.source), choisisFonds.includes(x.url), `data-fond="${esc(x.url)}"`)))
+        .join('');
     $('ficheCorps').innerHTML = `
     <div class="fi-hero" style="${fond ? `background-image:url('${esc(fond)}')` : ''}">
         <div class="fi-haut"><button class="btn small ghost" data-fermer="1">← Retour</button><span class="pill ok">🧾 Fiche · ce qui sera dans Emby</span></div>
@@ -619,7 +635,7 @@ function rendreFiche() {
             <dt>Fichier</dt><dd>${esc(c.destination)}</dd>
         </dl>
         <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera sur la vignette du clip dans Emby (« …-poster.jpg »).</div>
-        <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), (p.id === 'yt' ? etiquette('YouTube') : etiquette('vidéo')) + ' ' + esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>
+        <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), (p.id === 'yt' ? etiquette('YouTube') : p.id.startsWith('perso') ? etiquette('toi') : etiquette('vidéo')) + ' ' + esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>${tuilesAjout('poster')}
       </section>
       <section class="fi"><h3>🔗 Lien avec Emby</h3>${blocEmby(f)}</section>
       <section class="fi"><h3>🎤 Le groupe : ${esc(g.nom)}</h3>
@@ -630,7 +646,7 @@ function rendreFiche() {
         <h3>Vignette du groupe</h3><div class="aide">« folder.jpg » dans le dossier du groupe.</div>${bandeImages('', g.images.vignette, 'vignette')}
         <h3>Bannière</h3><div class="aide">« banner.jpg ».</div>${bandeImages('banniere', g.images.banniere, 'banniere')}
         <h3>Fonds d'écran</h3><div class="aide">${g.fanart.libres} place(s) libre(s) (« fanart.jpg » puis « extrafanart/ »). Les fonds déjà là ne sont jamais remplacés. Coche ceux que tu veux : ${choisisFonds.length} / ${g.fanart.libres}.</div>
-        <div class="bande">${fonds || '<div class="muted" style="padding:10px">Aucun fond trouvé.</div>'}</div>
+        <div class="bande">${fonds || '<div class="muted" style="padding:10px">Aucun fond trouvé.</div>'}</div>${g.fanart.libres ? tuilesAjout('fanart') : ''}
       </section>
       <section class="fi"><h3>💿 L'album : ${esc(c.album)}</h3>
         <h3 style="margin-top:6px">Pochette</h3><div class="aide">« folder.jpg » dans le dossier de l'album.</div>${bandeImages('carre', f.album.couverture, 'album_couverture')}
@@ -654,6 +670,11 @@ function rendreFiche() {
     const corps = $('ficheCorps');
     corps.querySelectorAll('[data-fermer]').forEach(b => b.onclick = fermerFiche);
     corps.querySelectorAll('[data-poster]').forEach(b => b.onclick = () => choixFiche({poster: b.dataset.poster}));
+    corps.querySelectorAll('[data-ajout-fichier]').forEach(b => b.onclick = () => { const inp = $('fichierImg'); inp.dataset.type = b.dataset.ajoutFichier; inp.value = ''; inp.click(); });
+    corps.querySelectorAll('[data-ajout-lien]').forEach(b => b.onclick = async () => {
+        const lien = await MouPrompt('Adresse de l’image (https://…)', '', {ok: 'Ajouter', annuler: 'Annuler'});
+        if (lien && lien.trim()) envoyerImage(b.dataset.ajoutLien, null, lien.trim());
+    });
     corps.querySelectorAll('[data-cle]').forEach(b => b.onclick = () => {
         const cle = b.dataset.cle, u = b.dataset.url, valeur = u === '__garder__' ? null : u;
         if (cle.startsWith('album_')) choixFiche({album: {[cle.slice(6)]: valeur}}); else choixFiche({images: {[cle]: valeur}});
@@ -668,10 +689,21 @@ function rendreFiche() {
     $('ficheBioReset').onclick = () => choixFiche({biographie: null});
     corps.querySelectorAll('[data-artiste]').forEach(b => b.onclick = () => choixFiche({artiste: b.dataset.artiste || null}));
 }
+async function envoyerImage(type, fichier, lien) {
+    noteFiche('Envoi de l’image…', '');
+    const fd = new FormData(); fd.append('type', type);
+    if (fichier) fd.append('fichier', fichier); if (lien) fd.append('lien', lien);
+    let d = {}, r;
+    try { r = await fetch('/api/travaux/' + FI.id + '/image', {method: 'POST', body: fd}); d = await r.json(); }
+    catch (e) { d = {error: 'Envoi impossible' + (r ? ' (code ' + r.status + ')' : '') + '.'}; }
+    if ((r && !r.ok) || d.error) return noteFiche(d.error || 'Ajout impossible.', 'err');
+    const y = $('fiche').scrollTop; FI = d; rendreFiche(); $('fiche').scrollTop = y;
+    noteFiche('Image ajoutée et choisie.', '');
+}
 async function choixFiche(corps, garderDefilement) {
     const y = $('fiche').scrollTop;
     const d = await post('/api/travaux/' + FI.id + '/choix', corps);
-    if (d.error) return note(d.error, 'err');
+    if (d.error) return noteFiche(d.error, 'err');
     FI = d; rendreFiche(); $('fiche').scrollTop = y;
 }
 async function ouvrirFiche(id) {
@@ -683,6 +715,7 @@ async function ouvrirFiche(id) {
 }
 function fermerFiche() { $('fiche').classList.remove('ouvert'); document.body.style.overflow = ''; FI = null; suivreTravaux(); }
 $('ficheFermer').onclick = fermerFiche;
+$('fichierImg').onchange = () => { const f = $('fichierImg').files[0]; if (f && FI) envoyerImage($('fichierImg').dataset.type, f, null); };
 $('ficheRanger').onclick = async () => { if (!FI) return; const id = FI.id, nom = FI.clip.titre; if (await rangerClip(id, nom)) fermerFiche(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('fiche').classList.contains('ouvert')) fermerFiche(); });
 

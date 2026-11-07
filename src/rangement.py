@@ -19,6 +19,11 @@ IMAGES_GROUPE = (("vignette", "folder.jpg"), ("banniere", "banner.jpg"), ("logo"
                  ("fanart2", "extrafanart/fanart1.jpg"), ("fanart3", "extrafanart/fanart2.jpg"), ("fanart4", "extrafanart/fanart3.jpg"))
 
 
+def _image_ligne(url: str) -> dict:
+    """Une image à poser : adresse d'Internet (url) ou fichier local ajouté à la main (« file://… » : copié, jamais téléchargé)."""
+    return {"source": url[len("file://"):]} if str(url).startswith("file://") else {"url": url}
+
+
 def plan(racine, dossier_groupe_existant, groupe, album, titre, fichier_video, poster=None, nfo_clip="", nfo_artiste="", images_groupe=None, images_album=None,
          remplacer=()) -> list[dict]:
     """La liste exacte de ce qui serait créé. Chaque ligne : {type, chemin, existe, cle?, remplacer?, taille?}. Aucune écriture.
@@ -45,15 +50,15 @@ def plan(racine, dossier_groupe_existant, groupe, album, titre, fichier_video, p
         if not (images_album or {}).get("couverture"):
             ajouter("image", a / "folder.jpg", source=str(poster))          # pas de pochette connue : le poster du premier clip (jamais remplacé ensuite)
     if (images_album or {}).get("couverture"):
-        ajouter("image", a / "folder.jpg", url=images_album["couverture"], cle="album_couverture", remplacer="album_couverture" in remplacer)
+        ajouter("image", a / "folder.jpg", **_image_ligne(images_album["couverture"]), cle="album_couverture", remplacer="album_couverture" in remplacer)
     if (images_album or {}).get("cdart"):
-        ajouter("image", a / "cdart.png", url=images_album["cdart"], cle="album_cdart", remplacer="album_cdart" in remplacer)
+        ajouter("image", a / "cdart.png", **_image_ligne(images_album["cdart"]), cle="album_cdart", remplacer="album_cdart" in remplacer)
     if nfo_artiste:
         ajouter("nfo", g / "artist.nfo", contenu=nfo_artiste)
     for cle, nom in IMAGES_GROUPE:
         url = (images_groupe or {}).get(cle)
         if url:
-            ajouter("image", g / nom, url=url, cle=cle, remplacer=cle in remplacer)
+            ajouter("image", g / nom, **_image_ligne(url), cle=cle, remplacer=cle in remplacer)
     return lignes
 
 
@@ -98,21 +103,21 @@ def executer(lignes: list[dict], sauvegarde=None) -> dict:
                 chemin.write_text(l["contenu"], encoding="utf-8")
             elif l["type"] == "image":
                 if l.get("source"):
-                    _copier_verifie(Path(l["source"]), chemin)
+                    contenu = Path(l["source"]).read_bytes()
                 else:
                     contenu, pb = _telecharger_image(l["url"])
                     if contenu is None:
                         ignores.append(f"{chemin.name} : {pb}" + (" (l'ancienne est gardée)" if chemin.exists() else ""))
                         continue
-                    if chemin.exists():                                    # remplacement voulu : sauvegarde d'abord
-                        dossier_sauv = Path(sauvegarde) / time.strftime("%Y-%m-%d_%H%M%S")
-                        dossier_sauv.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(chemin, dossier_sauv / f"{chemin.parent.name} - {chemin.name}")
-                        faits.append(f"{chemin.name} remplacée (l'ancienne est dans {dossier_sauv})")
-                        chemin.write_bytes(contenu)
-                        continue
-                    chemin.parent.mkdir(parents=True, exist_ok=True)
+                if chemin.exists():                                        # remplacement voulu : sauvegarde d'abord, la nouvelle est déjà entièrement en main
+                    dossier_sauv = Path(sauvegarde) / time.strftime("%Y-%m-%d_%H%M%S")
+                    dossier_sauv.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(chemin, dossier_sauv / f"{chemin.parent.name} - {chemin.name}")
                     chemin.write_bytes(contenu)
+                    faits.append(f"{chemin.name} remplacée (l'ancienne est dans {dossier_sauv})")
+                    continue
+                chemin.parent.mkdir(parents=True, exist_ok=True)
+                chemin.write_bytes(contenu)
             faits.append(chemin.name)
         except (OSError, requests.RequestException) as e:
             logger.error("Rangement : %s : %s", chemin, e)
