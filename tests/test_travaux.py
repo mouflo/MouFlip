@@ -238,10 +238,140 @@ class RangementTest(unittest.TestCase):
         self.assertIn("pas pu être prévenu", rangement.prevenir_emby(emby2, "/x"))
 
 
+class FicheTest(unittest.TestCase):
+    """La fiche : ce qui sera visible dans Emby, avec choix des images. Faux YouTube, faux dossier « Video clip »."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.racine = self.tmp / "Video clip"
+        self.racine.mkdir()
+        self.emby = mock.Mock(configured=True)
+        travaux.TRAVAUX.clear()
+        travaux.configurer(self.tmp / "data", lambda: str(self.racine), lambda: 89.0, lambda: "192k", self.emby)
+        cands = {"vignette": [{"url": "http://i/t1.jpg", "source": "fanart.tv"}, {"url": "http://i/t2.jpg", "source": "TheAudioDB"}],
+                 "banniere": [{"url": "http://i/b1.jpg", "source": "fanart.tv"}], "logo": [{"url": "http://i/l1.png", "source": "fanart.tv"}, {"url": "http://i/l2.png", "source": "fanart.tv"}],
+                 "fanart": [{"url": f"http://i/f{i}.jpg", "source": "fanart.tv"} for i in range(1, 7)]}
+        self.ctx = {"nom": "aespa", "mbid": "b51c672b-0000-0000-0000-000000000000", "fiche": {"nom": "aespa", "mbid": "b51c672b", "pays": "KR", "debut": "2020"},
+                    "dossier_groupe": "", "images": {}, "biographie": "Bio d'origine", "biographie_langue": "fr", "genre": "K-Pop", "candidats": cands,
+                    "images_album": {"rg1": {"couverture": "http://i/c1.jpg", "couverture_liste": ["http://i/c1.jpg", "http://i/c2.jpg"], "cdart": "http://i/cd1.png", "cdart_liste": ["http://i/cd1.png"]}}}
+
+        def faux_telechargement(video_id, dossier, progression=None, ydl_cls=None, format_id=""):
+            dossier = Path(dossier)
+            dossier.mkdir(parents=True, exist_ok=True)
+            faire_video(dossier / "source.mkv", db_volume=-4, duree=6)
+            return {"fichier": str(dossier / "source.mkv"), "vignette": "", "titre": "aespa 'LEMONADE' MV", "chaine": "SMTOWN", "duree": 6}
+        self.p = mock.patch.object(travaux.telechargement, "telecharger", side_effect=faux_telechargement)
+        self.p.start()
+        c = travaux.ajouter(self.ctx, {"titre": "LEMONADE", "album": "LEMONADE", "annee": "2026", "mbid": "m1", "rg": "rg1", "video_id": "abcdefghijk"})
+        travaux._preparer(travaux.TRAVAUX[c["id"]])
+        self.tid = c["id"]
+
+    def tearDown(self):
+        self.p.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_la_fiche_montre_tout(self):
+        f = travaux.fiche(self.tid)
+        self.assertEqual(f["etat"], "pret")
+        self.assertEqual((f["clip"]["titre"], f["clip"]["album"], f["clip"]["annee"], f["clip"]["video"]["resolution"]), ("LEMONADE", "LEMONADE", "2026", "180p"))
+        self.assertIn("<musicvideo>", f["clip"]["nfo"])
+        self.assertTrue(f["clip"]["destination"].endswith("aespa - LEMONADE - LEMONADE.mkv"))
+        self.assertGreaterEqual(len(f["clip"]["posters"]), 3)                     # vignette (si dispo) + images prises dans la vidéo
+        self.assertEqual(f["groupe"]["biographie"], "Bio d'origine")
+        self.assertEqual([x["url"] for x in f["groupe"]["images"]["logo"]["candidats"]], ["http://i/l1.png", "http://i/l2.png"])
+        self.assertEqual(len(f["groupe"]["fanart"]["candidats"]), 6)
+        self.assertEqual(f["groupe"]["fanart"]["libres"], 4)
+        self.assertEqual([x["url"] for x in f["album"]["couverture"]["candidats"]], ["http://i/c1.jpg", "http://i/c2.jpg"])
+
+    def test_par_defaut_la_premiere_image_de_chaque_type_et_quatre_fonds(self):
+        plan = {l.get("cle"): l for l in travaux.construire_plan(travaux.TRAVAUX[self.tid]) if l.get("cle")}
+        self.assertEqual(plan["logo"]["url"], "http://i/l1.png")
+        self.assertEqual(plan["vignette"]["url"], "http://i/t1.jpg")
+        self.assertEqual([plan[k]["url"] for k in ("fanart", "fanart2", "fanart3", "fanart4")], [f"http://i/f{i}.jpg" for i in range(1, 5)])
+        self.assertEqual(plan["album_couverture"]["url"], "http://i/c1.jpg")
+
+    def test_choix_d_images_pris_en_compte(self):
+        f, err = travaux.enregistrer_choix(self.tid, {"images": {"logo": "http://i/l2.png", "banniere": "", "fanart": ["http://i/f6.jpg", "http://i/f2.jpg"]},
+                                                       "album": {"couverture": "http://i/c2.jpg"}, "poster": "f35", "biographie": "Ma bio"})
+        self.assertEqual(err, "")
+        plan = {l.get("cle"): l for l in travaux.construire_plan(travaux.TRAVAUX[self.tid]) if l.get("cle")}
+        self.assertEqual(plan["logo"]["url"], "http://i/l2.png")
+        self.assertNotIn("banniere", plan)                                        # « aucune » : rien n'est récupéré
+        self.assertEqual((plan["fanart"]["url"], plan["fanart2"]["url"]), ("http://i/f6.jpg", "http://i/f2.jpg"))
+        self.assertNotIn("fanart3", plan)
+        self.assertEqual(plan["album_couverture"]["url"], "http://i/c2.jpg")
+        self.assertIn("Ma bio", travaux._nfo_artiste(travaux.TRAVAUX[self.tid]))
+        self.assertTrue(travaux._chemin_poster(travaux.TRAVAUX[self.tid]).endswith("image_35.jpg"))
+        self.assertEqual(f["groupe"]["biographie"], "Ma bio")
+
+    def test_image_non_proposee_refusee(self):
+        f, err = travaux.enregistrer_choix(self.tid, {"images": {"logo": "http://pirate/x.png"}})
+        self.assertIsNone(f)
+        self.assertIn("non proposée", err)
+        self.assertIsNone(travaux.enregistrer_choix(self.tid, {"images": {"fanart": ["http://i/f1.jpg"] * 5}})[0])      # 4 fonds au plus
+        self.assertIsNone(travaux.enregistrer_choix(self.tid, {"poster": "inconnu"})[0])
+
+    def test_image_deja_la_gardee_sauf_choix_explicite_et_sauvegardee(self):
+        g = self.racine / "aespa"
+        g.mkdir()
+        (g / "logo.png").write_bytes(b"ANCIEN")
+        (g / "fanart.jpg").write_bytes(b"FOND")
+        self.ctx["dossier_groupe"] = str(g)
+        travaux.TRAVAUX[self.tid]["contexte"]["dossier_groupe"] = str(g)
+        plan = {l.get("cle"): l for l in travaux.construire_plan(travaux.TRAVAUX[self.tid]) if l.get("cle")}
+        self.assertFalse(plan["logo"]["remplacer"])                               # par défaut : l'existant est gardé
+        self.assertNotIn("fanart", plan)                                         # fond déjà là : jamais remplacé
+        self.assertEqual(plan["fanart2"]["url"], "http://i/f1.jpg")               # les propositions remplissent seulement les places libres
+        travaux.enregistrer_choix(self.tid, {"images": {"logo": "http://i/l2.png"}})
+        plan = {l.get("cle"): l for l in travaux.construire_plan(travaux.TRAVAUX[self.tid]) if l.get("cle")}
+        self.assertTrue(plan["logo"]["remplacer"])                                # choix explicite : remplacement
+        faux = mock.Mock(status_code=200, content=b"NOUVEAU")
+        with mock.patch.object(rangement.requests, "get", return_value=faux):
+            r = travaux.ranger(self.tid)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((g / "logo.png").read_bytes(), b"NOUVEAU")
+        self.assertEqual((g / "fanart.jpg").read_bytes(), b"FOND")
+        sauv = list((self.tmp / "data" / "sauvegardes").rglob("*logo.png"))
+        self.assertEqual(len(sauv), 1)
+        self.assertEqual(sauv[0].read_bytes(), b"ANCIEN")                         # l'ancien logo est sauvegardé
+
+    def test_remplacement_echoue_l_ancienne_image_reste(self):
+        g = self.racine / "aespa"
+        g.mkdir()
+        (g / "logo.png").write_bytes(b"ANCIEN")
+        travaux.TRAVAUX[self.tid]["contexte"]["dossier_groupe"] = str(g)
+        travaux.enregistrer_choix(self.tid, {"images": {"logo": "http://i/l2.png"}})
+        with mock.patch.object(rangement.requests, "get", return_value=mock.Mock(status_code=404, content=b"")):
+            r = travaux.ranger(self.tid)
+        self.assertTrue(r["ok"])
+        self.assertEqual((g / "logo.png").read_bytes(), b"ANCIEN")                # nouvelle introuvable : l'ancienne n'est pas touchée
+        self.assertTrue(any("gardée" in m for m in r["resultat"]["ignores"]))
+
+    def test_les_choix_du_groupe_sont_reutilises_pour_le_clip_suivant(self):
+        travaux.enregistrer_choix(self.tid, {"images": {"logo": "http://i/l2.png"}})
+        c2 = travaux.ajouter(self.ctx, {"titre": "Supernova", "album": "Armageddon", "video_id": "abcdefghijk"})
+        self.assertEqual(travaux.TRAVAUX[c2["id"]]["choix"]["images"]["logo"], "http://i/l2.png")
+        self.assertIsNone(travaux.TRAVAUX[c2["id"]]["choix"]["biographie"])        # la biographie et le poster se choisissent clip par clip
+
+    def test_fiche_d_un_clip_pas_pret(self):
+        c = travaux.ajouter(self.ctx, {"titre": "Autre", "album": "Autre", "video_id": "abcdefghijk"})
+        self.assertIsNone(travaux.fiche(c["id"]))
+
+
+class QualitesTest(unittest.TestCase):
+    def test_format_demande(self):
+        self.assertEqual(telechargement.format_demande(""), "bv*+ba[acodec^=mp4a]/bv*+ba/b")                # sans choix : la meilleure
+        self.assertEqual(telechargement.format_demande("271"), "271+ba[acodec^=mp4a]/271+ba")              # choix : cette image, jamais autre chose en silence
+        self.assertEqual(telechargement.format_demande("271; rm -rf /"), "bv*+ba[acodec^=mp4a]/bv*+ba/b")  # identifiant douteux : ignoré
+
+    def test_options_utilisent_le_format_choisi(self):
+        self.assertIn("137+ba", telechargement.options(Path("/tmp/x"), None, "137")["format"])
+
+
 class FanartTest(unittest.TestCase):
     def test_sans_cle(self):
         with mock.patch.dict(os.environ, {"FANART_API_KEY": ""}):
-            self.assertEqual(sources.images_fanart("x"), {"cle": False, "images": {}, "albums": {}})
+            self.assertEqual(sources.images_fanart("x"), {"cle": False, "images": {}, "listes": {}, "albums": {}})
 
     def test_choix_de_la_plus_aimee(self):
         d = {"artistthumb": [{"url": "t1", "likes": "2"}, {"url": "t2", "likes": "9"}], "hdmusiclogo": [{"url": "logo", "likes": "1"}],
@@ -250,11 +380,22 @@ class FanartTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"FANART_API_KEY": "k" * 32}), mock.patch.object(sources, "_get", return_value=d):
             r = sources.images_fanart("x")
         self.assertEqual(r["images"], {"vignette": "t2", "logo": "logo", "fanart": "f2", "fanart2": "f3", "fanart3": "f1"})
-        self.assertEqual(r["albums"], {"rg1": {"cdart": "cd", "couverture": "cov"}})
+        self.assertEqual(r["albums"], {"rg1": {"cdart": "cd", "couverture": "cov", "cdart_liste": ["cd"], "couverture_liste": ["cov"]}})
+        self.assertEqual(r["listes"]["vignette"], ["t2", "t1"])                  # toutes les images, la plus aimée d'abord
+        self.assertEqual(r["listes"]["logo"], ["logo", "vieux"])                  # logo HD avant le logo ordinaire
+        self.assertEqual(r["listes"]["fanart"], ["f2", "f3", "f1"])
+
+    def test_candidats_fusionnes_sans_doublon(self):
+        audiodb = {"images": {"vignette": "t2", "logo": "autre", "fanart": "f9", "fanart2": "f2"}}
+        fanart = {"listes": {"vignette": ["t2", "t1"], "logo": [], "banniere": [], "fanart": ["f2", "f3"]}}
+        c = sources.candidats_images(audiodb, fanart)
+        self.assertEqual([(x["url"], x["source"]) for x in c["vignette"]], [("t2", "fanart.tv"), ("t1", "fanart.tv")])
+        self.assertEqual([(x["url"], x["source"]) for x in c["logo"]], [("autre", "TheAudioDB")])
+        self.assertEqual([x["url"] for x in c["fanart"]], ["f2", "f3", "f9"])      # f2 vu chez fanart.tv : pas répété
 
     def test_artiste_inconnu(self):
         with mock.patch.dict(os.environ, {"FANART_API_KEY": "k" * 32}), mock.patch.object(sources, "_get", return_value=None):
-            self.assertEqual(sources.images_fanart("x"), {"cle": True, "images": {}, "albums": {}})
+            self.assertEqual(sources.images_fanart("x"), {"cle": True, "images": {}, "listes": {}, "albums": {}})
 
 
 class FileDeTravauxTest(unittest.TestCase):
@@ -270,7 +411,8 @@ class FileDeTravauxTest(unittest.TestCase):
         self.ctx = {"nom": "aespa", "mbid": "b51c672b-0000-0000-0000-000000000000", "fiche": {"nom": "aespa", "mbid": "b51c672b", "pays": "KR", "debut": "2020"},
                     "dossier_groupe": "", "images": {}, "biographie": "Bio", "genre": "K-Pop", "images_album": {}}
 
-        def faux_telechargement(video_id, dossier, progression=None, ydl_cls=None):
+        def faux_telechargement(video_id, dossier, progression=None, ydl_cls=None, format_id=""):
+            self.demande = (video_id, format_id)
             dossier = Path(dossier)
             dossier.mkdir(parents=True, exist_ok=True)
             faire_video(dossier / "source.mkv", db_volume=-4)
@@ -302,6 +444,12 @@ class FileDeTravauxTest(unittest.TestCase):
         self.assertEqual(travaux.TRAVAUX[c["id"]]["etat"], "range")
         self.emby._request.assert_called_once()
         self.assertFalse((self.tmp / "data/travail" / c["id"]).exists())         # dossier de travail nettoyé
+
+    def test_la_qualite_choisie_est_celle_qui_est_demandee(self):
+        c = travaux.ajouter(self.ctx, {"titre": "LEMONADE", "album": "L", "video_id": "abcdefghijk", "format_id": "271", "qualite": "1440p vp9"})
+        travaux._preparer(travaux.TRAVAUX[c["id"]])
+        self.assertEqual(self.demande, ("abcdefghijk", "271"))
+        self.assertEqual(travaux.TRAVAUX[c["id"]]["qualite"], "1440p vp9")
 
     def test_ranger_un_clip_qui_n_est_pas_pret_est_refuse(self):
         c = travaux.ajouter(self.ctx, {"titre": "X", "album": "X", "video_id": "abcdefghijk"})

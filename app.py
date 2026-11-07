@@ -103,7 +103,7 @@ def _construire_base(mbid: str) -> dict:
         audiodb = sources.images_audiodb(mbid)
     except sources.SourceIndisponible as e:
         erreurs.append(str(e))
-    fanart = {"cle": False, "images": {}, "albums": {}}
+    fanart = {"cle": False, "images": {}, "listes": {}, "albums": {}}
     try:
         fanart = sources.images_fanart(mbid)
     except sources.SourceIndisponible as e:
@@ -143,8 +143,8 @@ def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
                       "chemin_prevu": noms.chemin_prevu(DOSSIER_CLIPS, nom_dossier, fiche["nom"], c["album"], c["titre"])})
     return {"fiche": fiche, "dossier_groupe": str(dossier) if dossier else "", "dossier_nouveau": not dossier, "nb_locaux": len(locaux),
             "biographie": base["audiodb"].get("biographie") or base["wikipedia"], "biographie_langue": base["audiodb"].get("biographie_langue") or ("fr" if base["wikipedia"] else ""),
-            "images": {**base["audiodb"].get("images", {}), **base["fanart"]["images"]}, "images_album": base["fanart"]["albums"],
-            "fanart_cle": base["fanart"]["cle"], "clips": clips, "erreurs": base["erreurs"] + ([avertissement] if avertissement else []), "racine": DOSSIER_CLIPS,
+            "images": {**base["audiodb"].get("images", {}), **base["fanart"]["images"]}, "images_album": base["fanart"]["albums"], "candidats": sources.candidats_images(base["audiodb"], base["fanart"]),
+            "genre_audiodb": base["audiodb"].get("genre", ""), "fanart_cle": base["fanart"]["cle"], "clips": clips, "erreurs": base["erreurs"] + ([avertissement] if avertissement else []), "racine": DOSSIER_CLIPS,
             "racine_ok": Path(DOSSIER_CLIPS).is_dir(), "enregistre": base.get("enregistre", 0), "depuis_cache": not actualiser and not avertissement and bool(base.get("enregistre"))}
 
 
@@ -227,7 +227,8 @@ def _contexte_groupe(mbid: str) -> dict:
     """Tout ce qu'il faut savoir du groupe pour ranger ses clips (fiche, dossier existant, images, biographie)."""
     g = _groupe_complet(mbid)
     return {"nom": g["fiche"]["nom"], "mbid": mbid, "fiche": g["fiche"], "dossier_groupe": g["dossier_groupe"], "images": g["images"],
-            "biographie": g["biographie"], "images_album": g.get("images_album", {}), "genre": (g["fiche"].get("genres") or ["K-Pop"])[0].title() if (g["fiche"].get("genres") or []) else "K-Pop"}
+            "biographie": g["biographie"], "biographie_langue": g.get("biographie_langue", ""), "images_album": g.get("images_album", {}),
+            "candidats": g.get("candidats", {}), "genre": (g["fiche"].get("genres") or ["K-Pop"])[0].title() if (g["fiche"].get("genres") or []) else "K-Pop"}
 
 
 @app.route("/api/travaux", methods=["GET", "POST"])
@@ -243,14 +244,59 @@ def api_travaux():
     except sources.SourceIndisponible as e:
         return jsonify({"error": f"MusicBrainz est injoignable : {e}"}), 502
     choix = _choix_lire().get(mbid, {})
+    qualites = (_lire_json(_qualite_fichier()) or {}).get(mbid, {})
     ajoutes = []
     for c in clips[:40]:
         titre = str(c.get("titre", "")).strip()
         if not titre:
             continue
+        video_id = str(c.get("video_id") or choix.get(titre, ""))
+        q = qualites.get(titre) or {}
+        if q.get("video_id") and (not video_id or video_id == q["video_id"]):          # qualité choisie sur CETTE vidéo seulement
+            video_id = q["video_id"]
+            fid, texte = q.get("format_id", ""), q.get("texte", "")
+        else:
+            fid, texte = "", ""
         ajoutes.append(travaux.ajouter(ctx, {"titre": titre, "album": str(c.get("album") or titre), "annee": str(c.get("annee") or ""),
-                                              "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or ""), "video_id": str(c.get("video_id") or choix.get(titre, ""))}))
+                                              "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or ""), "video_id": video_id,
+                                              "format_id": fid, "qualite": texte}))
     return jsonify({"travaux": ajoutes})
+
+
+@app.route("/api/travaux/<tid>/fiche", methods=["GET"])
+def api_travaux_fiche(tid):
+    f = travaux.fiche(tid)
+    return (jsonify(f), 200) if f else (jsonify({"error": "Ce clip n'est pas prêt : sa fiche n'existe pas encore."}), 404)
+
+
+@app.route("/api/travaux/<tid>/choix", methods=["POST"])
+def api_travaux_choix(tid):
+    f, err = travaux.enregistrer_choix(tid, request.get_json(silent=True) or {})
+    return (jsonify(f), 200) if f else (jsonify({"error": err}), 400)
+
+
+@app.route("/api/travaux/<tid>/poster/<pid>")
+def api_travaux_poster(tid, pid):
+    from flask import send_file
+    chemin = travaux.fichier_poster(tid, pid) if re.fullmatch(r"\w{1,12}", pid) else ""
+    if not chemin:
+        return jsonify({"error": "Poster introuvable."}), 404
+    return send_file(chemin, mimetype="image/jpeg", max_age=60)
+
+
+@app.route("/api/existant")
+def api_existant():
+    """Montre une image DÉJÀ présente dans « Video clip » (pour la comparer aux propositions). Seulement un .jpg/.png situé sous le dossier des clips."""
+    from flask import send_file
+    chemin = Path(request.args.get("chemin", ""))
+    try:
+        racine = Path(DOSSIER_CLIPS).resolve()
+        ok = chemin.resolve().is_relative_to(racine) and chemin.suffix.lower() in (".jpg", ".jpeg", ".png") and chemin.is_file()
+    except (OSError, ValueError):
+        ok = False
+    if not ok:
+        return jsonify({"error": "Image introuvable."}), 404
+    return send_file(chemin, max_age=60)
 
 
 @app.route("/api/travaux/<tid>/ranger", methods=["POST"])
@@ -435,6 +481,47 @@ def api_apercu():
         return jsonify({"error": f"YouTube ne répond pas : {str(e)[:160]}"}), 502
     _APERCUS[cle] = (time.time(), c)
     return jsonify({"candidats": c})
+
+
+_QUALITES = {}                     # id de vidéo -> (heure, qualités) : 1 h
+
+
+@app.route("/api/apercu/qualites", methods=["POST"])
+def api_qualites():
+    """Toutes les qualités d'une vidéo (1080p, 1440p, 4K… avec codec, débit et taille) pour choisir laquelle télécharger. Lecture seule."""
+    vid = str((request.get_json(silent=True) or {}).get("video_id", ""))
+    ancien = _QUALITES.get(vid)
+    if ancien and time.time() - ancien[0] < 3600:
+        return jsonify(ancien[1])
+    r = formats.liste_qualites(vid)
+    if r.get("etat") == "ok":
+        _QUALITES[vid] = (time.time(), r)
+    return jsonify(r)
+
+
+def _qualite_fichier():
+    return BASE_DIR / "data" / "choix_qualite.json"
+
+
+@app.route("/api/choix_qualite/<mbid>", methods=["GET"])
+def api_choix_qualite_lire(mbid):
+    return jsonify({"choix": (_lire_json(_qualite_fichier()) or {}).get(mbid, {})})
+
+
+@app.route("/api/choix_qualite", methods=["POST"])
+def api_choix_qualite():
+    """Retient la qualité choisie pour un clip ({video_id, format_id, texte}) ; format_id vide = « la meilleure » (retire le choix)."""
+    b = request.get_json(silent=True) or {}
+    mbid, titre, vid, fid = str(b.get("mbid", "")), str(b.get("titre", "")).strip(), str(b.get("video_id", "")), str(b.get("format_id", ""))
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not titre or (fid and (not re.fullmatch(r"[\w-]{11}", vid) or not re.fullmatch(r"[\w.-]{1,20}", fid))):
+        return jsonify({"ok": False, "error": "Choix invalide."}), 400
+    d = _lire_json(_qualite_fichier()) or {}
+    if fid:
+        d.setdefault(mbid, {})[titre] = {"video_id": vid, "format_id": fid, "texte": str(b.get("texte", ""))[:80]}
+    else:
+        d.get(mbid, {}).pop(titre, None)
+    _ecrire_json(_qualite_fichier(), d)
+    return jsonify({"ok": True})
 
 
 _VERSIONS = {}                     # id de vidéo -> (heure, infos) : 1 h

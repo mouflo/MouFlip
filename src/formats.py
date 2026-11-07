@@ -141,6 +141,40 @@ def infos_version(video_id: str, extraire=None) -> dict:
             "annee": (infos.get("upload_date") or "")[:4]}
 
 
+def liste_qualites(video_id: str, extraire=None, hauteur_min: int = 720) -> dict:
+    """Toutes les qualités vidéo d'UNE vidéo (une ligne par résolution et par codec : le plus gros débit), avec la taille de ce qu'on téléchargerait
+    (image + meilleur son AAC). Lecture seule. Ne lève jamais : {"etat": "erreur", "erreur": …} en cas de panne."""
+    from yt_dlp import YoutubeDL
+    extraire = extraire or (lambda q, o: YoutubeDL(o).extract_info(q, download=False))
+    if not re.fullmatch(r"[\w-]{11}", video_id or ""):
+        return {"etat": "erreur", "erreur": "identifiant de vidéo invalide"}
+    try:
+        infos = extraire(f"https://www.youtube.com/watch?v={video_id}", _options()) or {}
+    except Exception as e:
+        return {"etat": "erreur", "erreur": f"YouTube : {str(e)[:140]}"}
+    duree = infos.get("duration") or 0
+    tous = infos.get("formats") or []
+    aacs = [f for f in tous if f.get("vcodec") in (None, "none") and (f.get("acodec") or "").startswith("mp4a")]
+    son = max(aacs, key=lambda f: f.get("abr") or f.get("tbr") or 0) if aacs else None
+    taille_son = _taille(son, duree) if son else 0
+    meilleurs = {}
+    for f in tous:
+        if f.get("vcodec") in (None, "none") or not f.get("height") or f["height"] < hauteur_min:
+            continue
+        codec = {"avc1": "h264", "vp09": "vp9", "av01": "av1"}.get((f.get("vcodec") or "").split(".")[0], (f.get("vcodec") or "").split(".")[0])
+        cle = (f["height"], codec)
+        if cle not in meilleurs or (f.get("tbr") or 0) > (meilleurs[cle].get("tbr") or 0):
+            meilleurs[cle] = {**f, "_codec": codec}
+    lignes = []
+    for (h, codec), f in sorted(meilleurs.items(), key=lambda kv: (-kv[0][0], -(kv[1].get("tbr") or 0))):
+        t = _taille(f, duree)
+        lignes.append({"format_id": f.get("format_id"), "resolution": f"{h}p", "hauteur": h, "largeur": f.get("width"), "fps": f.get("fps"), "codec": codec,
+                       "debit_kbps": round(f.get("tbr") or 0), "taille_image": t, "taille": t + taille_son,
+                       "premium": "premium" in (f.get("format_note") or "").lower() or "premium" in (f.get("format") or "").lower()})
+    return {"etat": "ok", "duree": duree, "titre": infos.get("title", ""), "qualites": lignes,
+            "son": {"codec": "aac", "debit_kbps": round(son.get("abr") or son.get("tbr") or 0), "taille": taille_son} if son else None}
+
+
 def analyser(groupe: str, titre: str, extraire=None, video_id: str = "") -> dict:
     """Résultat complet pour un clip. Ne lève jamais : une panne de YouTube est dite (« erreur »), pas confondue avec « introuvable ».
     `video_id` : la vidéo que tu as choisie en la regardant (sinon la plus probable)."""

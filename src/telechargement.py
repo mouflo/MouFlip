@@ -2,6 +2,7 @@
 (« -S res,tbr »), vidéo + audio fusionnés en mkv SANS réencodage. L'audio AAC est préféré à l'Opus : AACGain règle son volume sans perte. Tout se passe dans un dossier de travail, jamais dans « Video clip »."""
 import json
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,8 +23,15 @@ def place_libre_go(dossier) -> float:
     return shutil.disk_usage(d).free / 1e9
 
 
-def options(dossier: Path, progression=None) -> dict:
-    o = {"format": "bv*+ba[acodec^=mp4a]/bv*+ba/b", "format_sort": ["res", "tbr"], "merge_output_format": "mkv", "outtmpl": str(dossier / "source.%(ext)s"),
+def format_demande(format_id: str = "") -> str:
+    """Sans choix : la meilleure image (résolution puis débit) + le son AAC. Avec un choix : CETTE image + le son AAC (jamais autre chose en silence)."""
+    if format_id and re.fullmatch(r"[\w.-]{1,20}", format_id):
+        return f"{format_id}+ba[acodec^=mp4a]/{format_id}+ba"
+    return "bv*+ba[acodec^=mp4a]/bv*+ba/b"
+
+
+def options(dossier: Path, progression=None, format_id: str = "") -> dict:
+    o = {"format": format_demande(format_id), "format_sort": ["res", "tbr"], "merge_output_format": "mkv", "outtmpl": str(dossier / "source.%(ext)s"),
          "noplaylist": True, "quiet": True, "no_warnings": True, "retries": 5, "fragment_retries": 5, "socket_timeout": 30,
          "writethumbnail": True, "overwrites": True, "noprogress": True}
     if progression:
@@ -32,7 +40,7 @@ def options(dossier: Path, progression=None) -> dict:
     return o
 
 
-def telecharger(video_id: str, dossier, progression=None, ydl_cls=None) -> dict:
+def telecharger(video_id: str, dossier, progression=None, ydl_cls=None, format_id: str = "") -> dict:
     """Télécharge https://www.youtube.com/watch?v=<video_id> dans `dossier`. Retourne {fichier, vignette, titre, chaine, duree}. Lève TelechargementError."""
     dossier = Path(dossier)
     dossier.mkdir(parents=True, exist_ok=True)
@@ -41,7 +49,7 @@ def telecharger(video_id: str, dossier, progression=None, ydl_cls=None) -> dict:
     if ydl_cls is None:
         from yt_dlp import YoutubeDL as ydl_cls
     try:
-        with ydl_cls(options(dossier, progression)) as ydl:
+        with ydl_cls(options(dossier, progression, format_id)) as ydl:
             infos = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
     except Exception as e:
         raise TelechargementError(f"YouTube : {str(e)[:220]}")
@@ -106,3 +114,22 @@ def vignette_en_jpg(vignette: str, fichier_video: str, dst) -> str:
         except (OSError, subprocess.SubprocessError):
             continue
     return ""
+
+
+def images_extraites(fichier_video, dossier, combien: int = 4) -> list[dict]:
+    """Quelques images prises dans la vidéo elle-même (à 12, 35, 58 et 80 % de sa durée) : autant de posters possibles. [{pourcent, fichier}]."""
+    try:
+        duree = float(sonder(fichier_video)["duree"])
+    except TelechargementError:
+        return []
+    sortie = []
+    for i, pct in enumerate((12, 35, 58, 80)[:combien]):
+        dst = Path(dossier) / f"image_{pct}.jpg"
+        try:
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(duree * pct / 100), "-i", str(fichier_video), "-frames:v", "1",
+                            "-vf", "scale='min(1280,iw)':-2", "-q:v", "3", str(dst)], check=True, capture_output=True, timeout=120)
+            if dst.exists() and dst.stat().st_size > 0:
+                sortie.append({"pourcent": pct, "fichier": str(dst)})
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return sortie

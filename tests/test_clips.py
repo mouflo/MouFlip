@@ -183,12 +183,18 @@ class RoutesTest(unittest.TestCase):
         (self.racine / "BLACKPINK" / "BORN PINK" / "BLACKPINK - BORN PINK - Pink Venom.mkv").write_bytes(b"x")
         self._racine, A.DOSSIER_CLIPS = A.DOSSIER_CLIPS, str(self.racine)
         self._cache, A.CACHE_DIR = A.CACHE_DIR, Path(self.tmp.name) / "cache"          # jamais le vrai cache enregistré
+        self._p_choix = mock.patch.object(A, "_choix_fichier", return_value=Path(self.tmp.name) / "choix.json")        # ni les vrais choix de l'utilisatrice
+        self._p_qualite = mock.patch.object(A, "_qualite_fichier", return_value=Path(self.tmp.name) / "choix_qualite.json")
+        self._p_choix.start()
+        self._p_qualite.start()
         A._CACHE_GROUPES.clear()
         self.c = A.app.test_client()
         self.c.environ_base["REMOTE_ADDR"] = "192.168.1.50"
         self.assertEqual(self.c.post("/login", data={"username": "admin", "password": "mdp-de-test-123"}).status_code, 302)
 
     def tearDown(self):
+        self._p_choix.stop()
+        self._p_qualite.stop()
         self.A.DOSSIER_CLIPS = self._racine
         self.A.CACHE_DIR = self._cache
         for k, v in self._env.items():
@@ -309,6 +315,26 @@ class RoutesTest(unittest.TestCase):
         ecrire.assert_not_called()
         self.assertEqual(self.c.post("/api/settings/imvdb", json={"api_key": "a b"}).status_code, 400)
 
+    def test_choix_de_qualite_enregistre_et_transmis_aux_travaux(self):
+        p1, p2, p3, p4 = self._faux_mb()
+        with p1, p2, p3, p4:
+            r = self.c.post("/api/choix_qualite", json={"mbid": self.MB, "titre": "Pink Venom", "video_id": "gQlMMD8auMs", "format_id": "271", "texte": "1440p vp9"})
+            self.assertTrue(r.get_json()["ok"])
+            self.assertEqual(self.c.get("/api/choix_qualite/" + self.MB).get_json()["choix"]["Pink Venom"]["format_id"], "271")
+            with mock.patch.object(self.A.travaux, "ajouter", side_effect=lambda ctx, clip: clip) as aj:
+                self.c.post("/api/travaux", json={"mbid": self.MB, "clips": [{"titre": "Pink Venom", "album": "BORN PINK"}]})
+            clip = aj.call_args.args[1]
+            self.assertEqual((clip["video_id"], clip["format_id"], clip["qualite"]), ("gQlMMD8auMs", "271", "1440p vp9"))
+            # une autre vidéo choisie pour ce clip : la qualité choisie sur la première n'est PAS appliquée
+            with mock.patch.object(self.A.travaux, "ajouter", side_effect=lambda ctx, clip: clip) as aj:
+                self.c.post("/api/travaux", json={"mbid": self.MB, "clips": [{"titre": "Pink Venom", "album": "BORN PINK", "video_id": "zzzzzzzzzzz"}]})
+            self.assertEqual((aj.call_args.args[1]["video_id"], aj.call_args.args[1]["format_id"]), ("zzzzzzzzzzz", ""))
+            # format_id vide = retour à « la meilleure »
+            self.c.post("/api/choix_qualite", json={"mbid": self.MB, "titre": "Pink Venom", "video_id": "", "format_id": ""})
+            self.assertEqual(self.c.get("/api/choix_qualite/" + self.MB).get_json()["choix"], {})
+        self.assertEqual(self.c.post("/api/choix_qualite", json={"mbid": self.MB, "titre": "X", "video_id": "bad", "format_id": "271"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/choix_qualite", json={"mbid": self.MB, "titre": "X", "video_id": "gQlMMD8auMs", "format_id": "1; rm"}).status_code, 400)
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)
@@ -363,6 +389,37 @@ class ApercuTest(unittest.TestCase):
         self.assertFalse(any(str(a).startswith("ytsearch") for a in appels))   # pas de recherche : la vidéo est déjà choisie
         r2 = formats.analyser("BLACKPINK", "Pink Venom", extraire, video_id="pas valide")
         self.assertTrue(any(str(a).startswith("ytsearch") for a in appels))    # identifiant douteux : on cherche
+
+
+class ListeQualitesTest(unittest.TestCase):
+    FMTS = [{"format_id": "137", "height": 1080, "width": 1920, "vcodec": "avc1.640028", "tbr": 4016, "fps": 24, "filesize": 92_000_000},
+            {"format_id": "248", "height": 1080, "width": 1920, "vcodec": "vp09.00.40.08", "tbr": 2129, "fps": 24, "filesize": 49_000_000},
+            {"format_id": "614", "height": 1080, "width": 1920, "vcodec": "vp09.00.40.08", "tbr": 4281, "fps": 24, "format_note": "Premium", "filesize": 99_000_000},
+            {"format_id": "271", "height": 1440, "width": 2560, "vcodec": "vp09.00.50.08", "tbr": 8074, "fps": 24, "filesize": 186_000_000},
+            {"format_id": "313", "height": 2160, "width": 3840, "vcodec": "vp09.00.50.08", "tbr": 17045, "fps": 24, "filesize": 393_000_000},
+            {"format_id": "401", "height": 2160, "width": 3840, "vcodec": "av01.0.12M.08", "tbr": 12607, "fps": 24, "filesize": 291_000_000},
+            {"format_id": "135", "height": 480, "width": 854, "vcodec": "avc1.4D401E", "tbr": 960, "fps": 24, "filesize": 22_000_000},
+            {"format_id": "140", "acodec": "mp4a.40.2", "vcodec": "none", "abr": 129, "filesize": 3_100_000}]
+
+    def test_une_ligne_par_resolution_et_codec_du_plus_haut_au_plus_bas(self):
+        r = formats.liste_qualites("gQlMMD8auMs", lambda q, o: {"title": "t", "duration": 194, "formats": self.FMTS})
+        self.assertEqual(r["etat"], "ok")
+        self.assertEqual([(q["resolution"], q["codec"], q["format_id"]) for q in r["qualites"]],
+                         [("2160p", "vp9", "313"), ("2160p", "av1", "401"), ("1440p", "vp9", "271"), ("1080p", "vp9", "614"), ("1080p", "h264", "137")])
+        self.assertTrue(next(q for q in r["qualites"] if q["format_id"] == "614")["premium"])          # le flux Premium gagne à 1080p vp9
+        self.assertFalse(any(q["resolution"] == "480p" for q in r["qualites"]))                       # en dessous de 720p : pas proposé
+
+    def test_taille_image_plus_son(self):
+        r = formats.liste_qualites("gQlMMD8auMs", lambda q, o: {"duration": 194, "formats": self.FMTS})
+        q = r["qualites"][0]
+        self.assertEqual((q["taille_image"], q["taille"]), (393_000_000, 393_000_000 + 3_100_000))
+        self.assertEqual(r["son"]["debit_kbps"], 129)
+
+    def test_panne_et_identifiant(self):
+        self.assertEqual(formats.liste_qualites("x")["etat"], "erreur")
+        def casse(q, o):
+            raise RuntimeError("HTTP 429")
+        self.assertIn("429", formats.liste_qualites("abcdefghijk", casse)["erreur"])
 
 
 class VersionsTest(unittest.TestCase):

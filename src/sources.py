@@ -105,32 +105,54 @@ def images_audiodb(mbid: str) -> dict:
 
 def images_fanart(mbid: str) -> dict:
     """Images soignées de fanart.tv (API officielle, clé personnelle gratuite FANART_API_KEY ; sans clé : {} et cle=False).
-    Retourne {"cle": bool, "images": {vignette, banniere, logo, fanart, fanart2.. }, "albums": {id du groupe de sorties: {cdart, couverture}}}.
-    À chaque type d'image, la préférée des visiteurs de fanart.tv (le plus de « j'aime »)."""
+    Retourne {"cle": bool, "images": {vignette, banniere, logo, fanart, fanart2.. : la préférée}, "listes": {type: [toutes les images, la plus aimée d'abord]},
+    "albums": {id du groupe de sorties: {cdart, couverture, cdart_liste, couverture_liste}}}."""
     cle = os.getenv("FANART_API_KEY", "").strip()
+    vide = {"cle": bool(cle), "images": {}, "listes": {}, "albums": {}}
     if not cle:
-        return {"cle": False, "images": {}, "albums": {}}
+        return vide
     d = _get(f"https://webservice.fanart.tv/v3/music/{mbid}", {"api_key": cle})
     if not d:
-        return {"cle": True, "images": {}, "albums": {}}
+        return vide
 
     def tri(lst):
         return [x["url"] for x in sorted(lst or [], key=lambda x: -int(x.get("likes") or 0)) if x.get("url")]
 
-    fonds = tri(d.get("artistbackground"))
+    listes = {"vignette": tri(d.get("artistthumb")), "banniere": tri(d.get("musicbanner")),
+              "logo": tri(d.get("hdmusiclogo")) + [u for u in tri(d.get("musiclogo")) if u not in tri(d.get("hdmusiclogo"))],
+              "fanart": tri(d.get("artistbackground"))[:12]}
     images = {}
-    for nom, source in (("vignette", tri(d.get("artistthumb"))), ("banniere", tri(d.get("musicbanner"))),
-                        ("logo", tri(d.get("hdmusiclogo")) or tri(d.get("musiclogo")))):
-        if source:
-            images[nom] = source[0]
-    for i, u in enumerate(fonds[:4]):
+    for nom in ("vignette", "banniere", "logo"):
+        if listes[nom]:
+            images[nom] = listes[nom][0]
+    for i, u in enumerate(listes["fanart"][:4]):
         images["fanart" if i == 0 else f"fanart{i + 1}"] = u
     albums = {}
     for rg, a in (d.get("albums") or {}).items():
         cd, cv = tri(a.get("cdart")), tri(a.get("albumcover"))
         if cd or cv:
-            albums[rg] = {k: v[0] for k, v in (("cdart", cd), ("couverture", cv)) if v}
-    return {"cle": True, "images": images, "albums": albums}
+            albums[rg] = {**{k: v[0] for k, v in (("cdart", cd), ("couverture", cv)) if v}, "cdart_liste": cd, "couverture_liste": cv}
+    return {"cle": True, "images": images, "listes": listes, "albums": albums}
+
+
+def candidats_images(audiodb: dict, fanart: dict) -> dict:
+    """Toutes les images possibles par type, avec leur source : [{url, source}] — fanart.tv d'abord, puis TheAudioDB, sans doublon."""
+    sortie = {}
+    a = (audiodb or {}).get("images", {})
+    cles_audiodb = {"vignette": ("vignette",), "banniere": ("banniere",), "logo": ("logo",), "fanart": ("fanart", "fanart2", "fanart3", "fanart4")}
+    for t in ("vignette", "banniere", "logo", "fanart"):
+        vus, lst = set(), []
+        for u in (fanart or {}).get("listes", {}).get(t, []):
+            if u not in vus:
+                vus.add(u)
+                lst.append({"url": u, "source": "fanart.tv"})
+        for k in cles_audiodb[t]:
+            u = a.get(k)
+            if u and u not in vus:
+                vus.add(u)
+                lst.append({"url": u, "source": "TheAudioDB"})
+        sortie[t] = lst
+    return sortie
 
 
 def resume_wikipedia(titre: str, langue: str = "fr") -> str:

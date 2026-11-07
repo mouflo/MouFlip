@@ -51,6 +51,50 @@
     .alt { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
     .alt button { text-align:left; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:.8rem; cursor:pointer; max-width:100%; }
     .alt button.cur { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 18%, var(--field)); }
+
+    /* ===== la fiche (ce qui sera visible dans Emby) ===== */
+    #fiche { position:fixed; inset:0; z-index:100; background:var(--bg, #121315); overflow-y:auto; display:none; -webkit-overflow-scrolling:touch; }
+    #fiche.ouvert { display:block; }
+    .fi-hero { position:relative; min-height:210px; background-size:cover; background-position:center; background-color:#1b1d20; }
+    .fi-hero::after { content:''; position:absolute; inset:0; background:linear-gradient(to bottom, rgba(18,19,21,.30), rgba(18,19,21,.55) 60%, var(--bg, #121315)); }
+    .fi-hero > * { position:relative; z-index:1; }
+    .fi-haut { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; }
+    .fi-haut .btn { background:rgba(0,0,0,.55); }
+    .fi-entete { display:flex; gap:14px; align-items:flex-end; padding:8px 14px 14px; max-width:900px; margin:0 auto; }
+    .fi-entete .affiche { width:42%; max-width:300px; aspect-ratio:16/9; border-radius:8px; background:#000 center/cover; box-shadow:0 6px 20px rgba(0,0,0,.6); flex:none; }
+    .fi-entete .titres { min-width:0; }
+    .fi-entete .logo { max-height:54px; max-width:100%; display:block; margin-bottom:8px; }
+    .fi-entete h2 { margin:0; font-size:1.3rem; line-height:1.2; word-break:break-word; }
+    .fi-entete .sous { color:var(--muted); font-size:.85rem; margin-top:4px; }
+    .fi-corps { max-width:900px; margin:0 auto; padding:0 14px 120px; }
+    section.fi { background:var(--card); border-radius:10px; padding:14px; margin:12px 0; }
+    section.fi h3 { margin:0 0 4px; font-size:1.02rem; }
+    section.fi .aide { color:var(--muted); font-size:.8rem; margin-bottom:8px; }
+    .fi-infos { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:.88rem; margin:8px 0; }
+    .fi-infos dt { color:var(--muted); } .fi-infos dd { margin:0; word-break:break-word; }
+    .bande { display:flex; gap:8px; overflow-x:auto; padding:6px 2px 10px; scroll-snap-type:x proximity; }
+    .vign { flex:none; scroll-snap-align:start; width:160px; border:2px solid transparent; border-radius:8px; background:var(--field); padding:0; cursor:pointer; position:relative; overflow:hidden; color:var(--text); text-align:left; }
+    .vign img { width:100%; height:90px; object-fit:cover; display:block; background:#000; }
+    .vign.logo img { object-fit:contain; background:repeating-conic-gradient(#2c2c2c 0% 25%, #1d1d1d 0% 50%) 50% / 16px 16px; }
+    .vign.banniere { width:260px; } .vign.banniere img { height:48px; object-fit:contain; background:#000; }
+    .vign.fond { width:190px; } .vign.fond img { height:107px; }
+    .vign.carre { width:112px; } .vign.carre img { height:112px; }
+    .vign small { display:block; font-size:.68rem; color:var(--muted); padding:4px 6px; }
+    .vign .coche { position:absolute; top:5px; right:5px; width:22px; height:22px; border-radius:50%; background:var(--accent); color:#fff; font-size:.8rem; display:none; align-items:center; justify-content:center; }
+    .vign.sel { border-color:var(--accent); } .vign.sel .coche { display:flex; }
+    .vign.aucune { width:90px; display:flex; align-items:center; justify-content:center; min-height:120px; font-size:.8rem; text-align:center; padding:6px; }
+    .vign.actuelle small { color:#9bdc95; }
+    .vign.fixe { cursor:default; opacity:.9; }
+    .fi-bio { width:100%; min-height:150px; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:10px; font:inherit; font-size:.9rem; line-height:1.45; resize:vertical; }
+    .fi-nfo { background:#0d0e10; border-radius:6px; padding:10px; font:12px/1.4 ui-monospace,Menlo,monospace; color:#b9c0c8; white-space:pre-wrap; word-break:break-all; max-height:260px; overflow:auto; }
+    .fi-plan { list-style:none; margin:6px 0 0; padding:0; font-size:.8rem; }
+    .fi-plan li { padding:4px 0; border-top:1px solid var(--line); word-break:break-all; color:var(--muted); }
+    .fi-plan li b { color:var(--text); font-weight:600; }
+    .fi-barre { position:fixed; left:0; right:0; bottom:0; z-index:110; background:var(--card); border-top:1px solid var(--line); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; box-shadow:0 -4px 18px rgba(0,0,0,.45); }
+    .fi-barre .resume { flex:1; min-width:0; font-size:.78rem; color:var(--muted); }
+    .fi-barre .btn { padding:11px 14px; }
+    @media (max-width:560px) { .fi-barre { flex-wrap:wrap; } .fi-barre .resume { flex:1 1 100%; } .fi-barre .btn { flex:1; } }
+    @media (max-width:560px) { .fi-entete { flex-direction:column; align-items:flex-start; } .fi-entete .affiche { width:100%; max-width:none; } }
     /* barre des téléchargements : toujours visible en bas, la page reste défilable derrière ; un toucher déplie la liste */
     #travaux { position:fixed; left:0; right:0; bottom:0; z-index:50; margin:0; padding:0; border-radius:12px 12px 0 0; box-shadow:0 -4px 18px rgba(0,0,0,.45); max-width:960px; margin-left:auto; margin-right:auto; }
     #travaux[hidden] { display:none; }
@@ -64,6 +108,8 @@
     #travaux .corps { display:none; max-height:55vh; overflow-y:auto; padding:0 14px 12px; border-top:1px solid var(--line); }
     #travaux.ouvert .corps { display:block; }
     .job { border-top:1px solid var(--line); padding:10px 0; }
+    label.qual { display:flex; gap:10px; align-items:flex-start; padding:7px 4px; border-top:1px solid var(--line); cursor:pointer; font-size:.88rem; }
+    label.qual input { width:20px; height:20px; margin-top:2px; flex:none; }
     .job .titre { font-weight:600; word-break:break-word; }
     .job .barre { height:6px; background:var(--field); border-radius:3px; margin:6px 0; overflow:hidden; }
     .job .barre i { display:block; height:100%; background:var(--accent); }
@@ -90,6 +136,11 @@
 
     <div id="groupe" hidden></div>
 
+    <div id="fiche" role="dialog" aria-modal="true" aria-label="Fiche du clip">
+        <div id="ficheCorps"></div>
+        <div class="fi-barre"><div class="resume" id="ficheResume"></div><button class="btn ghost" id="ficheFermer">Fermer</button><button class="btn" id="ficheRanger">📁 Ranger dans Video clip</button></div>
+    </div>
+
     <div class="panel" id="travaux" hidden>
         <div class="entete" id="travauxEntete" role="button" tabindex="0" aria-label="Téléchargements et rangement : afficher ou masquer la liste">
             <span>⬇️</span><div class="resume" id="travauxResume"></div><span class="fleche">▲</span>
@@ -112,7 +163,7 @@ async function api(url, opts) {
 const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
 function note(text, kind) { $('msg').innerHTML = text ? `<div class="note ${kind || ''}">${esc(text)}</div>` : ''; }
 
-let G = null, F = {}, V = {}, AP = {}, VER = {};   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
+let G = null, F = {}, V = {}, AP = {}, VER = {}, Q = {}, QUAL = {};   // Q : qualité choisie par clip ; QUAL : qualités lues par vidéo   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
 
 async function chercher() {
     const q = $('q').value.trim(); if (q.length < 2) return;
@@ -131,6 +182,7 @@ async function ouvrir(mbid, actualiser) {
     if (d.error) return note(d.error, 'err');
     note(''); $('cands').innerHTML = ''; G = d; F = {}; AP = {};
     const ch = await api('/api/choix/' + mbid); V = ch.choix || {};
+    const cq = await api('/api/choix_qualite/' + mbid); Q = cq.choix || {};
     dessiner();
 }
 function filtreClips() {
@@ -190,15 +242,39 @@ function ligne(c, i) {
         ${c.source === 'video' ? '<span class="pill" title="MusicBrainz connaît une vidéo pour ce titre">🎞️ vidéo connue</span>' : '<span class="pill warn" title="Single ou titre-phare : la vidéo officielle est à vérifier sur YouTube">à vérifier sur YouTube</span>'}</div>
         <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
         <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div>
-        <div class="voir"><button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''}<div id="voir${i}"></div></div></div>`;
+        <div class="voir"><button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''} <span id="qp${i}">${Q[c.titre] ? '<span class="pill ok">qualité choisie : ' + esc(Q[c.titre].texte) + '</span>' : ''}</span><div id="voir${i}"></div></div></div>`;
 }
-const taille = o => !o ? '' : o >= 1e9 ? (o / 1e9).toFixed(2).replace('.', ',') + ' Go' : Math.round(o / 1e6) + ' Mo';
+const taille = o => !o ? '' : o < 1e6 ? Math.max(1, Math.round(o / 1e3)) + ' Ko' : o >= 1e9 ? (o / 1e9).toFixed(2).replace('.', ',') + ' Go' : Math.round(o / 1e6) + ' Mo';
 function texteVersion(id) {
     const r = VER[id];
     if (!r) return '';
     if (r.etat !== 'ok') return `⚠️ ${esc(r.erreur || 'illisible')}`;
     const f = r.format;
     return `<b>${esc(f.resolution)}</b> ${esc(f.codec)} ${f.debit_kbps} kb/s${f.fps ? ' · ' + Math.round(f.fps) + ' i/s' : ''}${f.premium ? ' · ⭐' : ''} · son ${f.audio_aac ? 'AAC ' + f.audio_aac.debit_kbps + ' kb/s' : '(pas d’AAC)'} · <b>${taille(r.taille)}</b>${r.annee ? ' · ' + esc(r.annee) : ''}`;
+}
+async function qualites(i, titre, videoId) {
+    const zone = $('qual' + i);
+    if (zone.innerHTML) { zone.innerHTML = ''; return; }                          // 2e appui : on referme
+    zone.innerHTML = '<div class="muted" style="margin-top:6px">Lecture des qualités…</div>';
+    if (!QUAL[videoId]) QUAL[videoId] = await post('/api/apercu/qualites', {video_id: videoId});
+    const r = QUAL[videoId];
+    if (r.etat !== 'ok') { zone.innerHTML = `<div class="note err">${esc(r.erreur || 'Qualités illisibles.')}</div>`; return; }
+    if (!r.qualites.length) { zone.innerHTML = '<div class="note warn">Aucune qualité de 720p ou plus pour cette vidéo.</div>'; return; }
+    const choisi = Q[titre] && Q[titre].video_id === videoId ? Q[titre].format_id : '';
+    const ligneQ = (id, txt, detail) => `<label class="qual"><input type="radio" name="q${i}" value="${esc(id)}" ${choisi === id ? 'checked' : ''}><span>${txt}<br><span class="muted">${detail}</span></span></label>`;
+    zone.innerHTML = '<div class="muted" style="margin:8px 0 4px">Choisis la qualité à télécharger (taille = image + son AAC' + (r.son ? ' ' + r.son.debit_kbps + ' kb/s' : '') + ') :</div>'
+        + ligneQ('', '<b>La meilleure (automatique)</b>', 'résolution la plus haute, puis le plus gros débit : ' + esc(r.qualites[0].resolution) + ' ' + esc(r.qualites[0].codec) + ' · ' + taille(r.qualites[0].taille))
+        + r.qualites.map(q => ligneQ(q.format_id, `<b>${esc(q.resolution)}</b> ${esc(q.codec)}${q.premium ? ' ⭐ Premium' : ''}`, `${q.debit_kbps} kb/s${q.fps ? ' · ' + Math.round(q.fps) + ' i/s' : ''} · <b>${taille(q.taille)}</b>`)).join('');
+    if (!choisi) zone.querySelector('input[value=""]').checked = true;
+    zone.querySelectorAll('input').forEach(inp => inp.onchange = async () => {
+        const q = r.qualites.find(x => x.format_id === inp.value);
+        const texte = q ? `${q.resolution} ${q.codec} ${taille(q.taille)}` : '';
+        const d = await post('/api/choix_qualite', {mbid: G.fiche.mbid, titre, video_id: q ? videoId : '', format_id: q ? q.format_id : '', texte});
+        if (!d.ok) { note(d.error || 'Choix impossible.', 'err'); return; }
+        if (q) { Q[titre] = {video_id: videoId, format_id: q.format_id, texte}; V[titre] = videoId; post('/api/choix', {mbid: G.fiche.mbid, titre, video_id: videoId}); }
+        else delete Q[titre];
+        $('qp' + i).innerHTML = q ? '<span class="pill ok">qualité choisie : ' + esc(texte) + '</span>' : '';
+    });
 }
 function majVersions(i, titre) {                                      // met à jour les lignes sans recharger le lecteur
     document.querySelectorAll('#voir' + i + ' .alt button').forEach(b => {
@@ -235,9 +311,12 @@ function montrer(i, titre, id) {
         <div class="muted" style="margin-top:6px">${c.length > 1 ? 'Versions possibles' : 'Version trouvée'} :</div>
         <div class="alt">${c.map(x => `<button data-id="${esc(x.id)}" class="${x.id === cur.id ? 'cur' : ''}">${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}${VER[x.id] ? '<br><span class="muted">' + texteVersion(x.id) + '</span>' : ''}</button>`).join('')}</div>
         <button class="btn small ghost" data-versions="1">📊 Format et taille de chaque version</button>
+        <button class="btn small ghost" data-qualites="1">📋 Toutes les qualités de cette vidéo</button>
+        <div id="qual${i}"></div>
         <button class="btn small" data-choisir="1">${V[titre] === cur.id ? '✅ Vidéo choisie' : '✅ C’est cette vidéo'}</button>`;
     zone.querySelector('.lecteur').onclick = e => { e.currentTarget.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(cur.id)}?autoplay=1&rel=0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; e.currentTarget.onclick = null; };
     zone.querySelectorAll('.alt button').forEach(b => b.onclick = () => montrer(i, titre, b.dataset.id));
+    const bq = zone.querySelector('[data-qualites]'); if (bq) bq.onclick = () => qualites(i, titre, cur.id);
     const bv = zone.querySelector('[data-versions]'); if (bv) bv.onclick = () => { bv.disabled = true; bv.textContent = 'Lecture des formats…'; lireVersions(i, titre); };
     zone.querySelector('[data-choisir]').onclick = () => { V[titre] = cur.id; post('/api/choix', {mbid: G.fiche.mbid, titre, video_id: cur.id}); montrer(i, titre, cur.id); const p = document.querySelectorAll('.clip')[i].querySelector('.voir .btn'); if (p && !p.nextElementSibling.classList.contains('pill')) p.insertAdjacentHTML('afterend', ' <span class="pill ok">vidéo choisie</span>'); };
 }
@@ -280,12 +359,132 @@ async function suivreTravaux() {
     resumeTravaux(liste);
     $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
     ajusterBas();
-    document.querySelectorAll('[data-plan]').forEach(b => b.onclick = () => { const z = $('plan' + b.dataset.plan); z.hidden = !z.hidden; });
+    document.querySelectorAll('[data-fiche]').forEach(b => b.onclick = () => ouvrirFiche(b.dataset.fiche));
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
     document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
     document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
     if (liste.some(t => ['attente', 'telechargement', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
 }
+
+// ============================ la fiche : tout ce qui sera visible dans Emby ============================
+let FI = null;
+const urlPoster = (id, pid) => '/api/travaux/' + id + '/poster/' + pid;
+const urlExistant = chemin => '/api/existant?chemin=' + encodeURIComponent(chemin);
+const dureeMin = s => s ? Math.floor(s / 60) + ' min ' + String(Math.round(s % 60)).padStart(2, '0') + ' s' : '';
+function vign(classe, url, legende, sel, attrs, extra) {
+    return `<button type="button" class="vign ${classe}${sel ? ' sel' : ''}" ${attrs || ''}><img loading="lazy" referrerpolicy="no-referrer" src="${esc(url)}" alt=""><span class="coche">✓</span><small>${legende}</small></button>`;
+}
+function bandeImages(typeCss, bloc, cle) {
+    // une image du groupe ou de l'album : « actuelle » (déjà dans Emby), les propositions, « aucune »
+    const ex = bloc.existant && bloc.existant.present, ch = bloc.choisi;
+    const defautActuelle = ex && ch === null;
+    let t = '';
+    if (ex) t += vign(typeCss + ' actuelle', urlExistant(bloc.existant.chemin), 'Actuelle · déjà dans Emby (gardée)', defautActuelle, `data-cle="${cle}" data-url="__garder__"`);
+    bloc.candidats.forEach((c, i) => {
+        const sel = ch === c.url || (ch === null && !ex && i === 0);
+        t += vign(typeCss, c.url, esc(c.source) + (ex && sel ? ' · remplacera l’actuelle' : ''), sel, `data-cle="${cle}" data-url="${esc(c.url)}"`);
+    });
+    if (!bloc.candidats.length && !ex) t += '<div class="muted" style="padding:10px">Aucune image trouvée.</div>';
+    t += `<button type="button" class="vign aucune${ch === '' ? ' sel' : ''}" data-cle="${cle}" data-url="">Aucune<span class="coche">✓</span></button>`;
+    return `<div class="bande">${t}</div>`;
+}
+function rendreFiche() {
+    const f = FI, c = f.clip, g = f.groupe;
+    const fond = (g.fanart.choisis && g.fanart.choisis[0]) || (g.fanart.existants.find(x => x.present) ? urlExistant(g.fanart.existants.find(x => x.present).chemin) : '') || ((g.fanart.candidats[0] || {}).url) || '';
+    const logoBloc = g.images.logo, logoUrl = logoBloc.choisi ? logoBloc.choisi : (logoBloc.choisi === '' ? '' : (logoBloc.existant.present ? urlExistant(logoBloc.existant.chemin) : ((logoBloc.candidats[0] || {}).url || '')));
+    const posterId = c.poster_choisi || (c.posters[0] || {}).id;
+    const v = c.video, a = c.audio, vol = c.volume || {};
+    // fonds d'écran : emplacements déjà occupés + propositions à cocher pour les places libres
+    const choisisFonds = g.fanart.choisis === null ? g.fanart.candidats.slice(0, g.fanart.libres).map(x => x.url) : g.fanart.choisis;
+    const fonds = g.fanart.existants.filter(x => x.present).map(x => vign('fond fixe', urlExistant(x.chemin), 'Déjà dans Emby · ' + esc(x.fichier), false, 'disabled'))
+        .concat(g.fanart.candidats.map(x => vign('fond', x.url, esc(x.source), choisisFonds.includes(x.url), `data-fond="${esc(x.url)}"`))).join('');
+    $('ficheCorps').innerHTML = `
+    <div class="fi-hero" style="${fond ? `background-image:url('${esc(fond)}')` : ''}">
+        <div class="fi-haut"><button class="btn small ghost" data-fermer="1">← Retour</button><span class="pill ok">🧾 Fiche · ce qui sera dans Emby</span></div>
+        <div class="fi-entete">
+            <div class="affiche" style="${posterId ? `background-image:url('${urlPoster(f.id, posterId)}')` : ''}"></div>
+            <div class="titres">${logoUrl ? `<img class="logo" referrerpolicy="no-referrer" src="${esc(logoUrl)}" alt="">` : ''}
+                <h2>${esc(c.titre)}</h2>
+                <div class="sous">${esc(c.groupe)} · ${esc(c.album)}${c.annee ? ' · ' + esc(c.annee) : ''}</div>
+                <div class="sous">${esc(v.resolution || '')} ${esc(v.codec || '')} · ${dureeMin(c.duree)}</div></div>
+        </div>
+    </div>
+    <div class="fi-corps">
+      <section class="fi"><h3>🎬 Le clip</h3>
+        <dl class="fi-infos">
+            <dt>Titre</dt><dd>${esc(c.titre)}</dd><dt>Groupe</dt><dd>${esc(c.groupe)}</dd><dt>Album</dt><dd>${esc(c.album)}${c.dossier_album_existe ? ' <span class="pill ok">dossier existant</span>' : ' <span class="pill">nouveau dossier</span>'}</dd>
+            <dt>Année</dt><dd>${esc(c.annee || '—')}</dd><dt>Durée</dt><dd>${dureeMin(c.duree)}</dd>
+            <dt>Image</dt><dd>${esc(v.resolution || '')} ${esc(v.codec || '')} · ${v.fps ? Math.round(v.fps) + ' i/s · ' : ''}${v.debit ? Math.round(v.debit / 1000) + ' kb/s' : ''}</dd>
+            <dt>Son</dt><dd>${esc(a.codec || '')} ${a.debit ? Math.round(a.debit / 1000) + ' kb/s' : ''} · volume ${vol.avant != null ? vol.avant + ' → ' + vol.apres + ' dB' : ''}<br><span class="muted">${esc(vol.methode || '')}</span></dd>
+            <dt>Taille</dt><dd>${taille(c.taille)}</dd><dt>Source</dt><dd>${esc(c.chaine || '')} · « ${esc(c.titre_youtube || '')} »</dd>
+            <dt>Fichier</dt><dd>${esc(c.destination)}</dd>
+        </dl>
+        <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera sur la vignette du clip dans Emby (« …-poster.jpg »).</div>
+        <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>
+      </section>
+      <section class="fi"><h3>🎤 Le groupe : ${esc(g.nom)}</h3>
+        <dl class="fi-infos"><dt>Pays</dt><dd>${esc(g.pays || '—')}</dd><dt>Début</dt><dd>${esc(g.debut || '—')}</dd><dt>Genre</dt><dd>${esc(g.genre || '—')}</dd>
+            <dt>Dossier</dt><dd>${esc(g.dossier)} ${g.dossier_existe ? '<span class="pill ok">existe</span>' : '<span class="pill">sera créé</span>'}</dd>
+            <dt>artist.nfo</dt><dd>${g.artist_nfo_existe ? '<span class="pill ok">déjà là : conservé</span>' : '<span class="pill">sera créé</span>'}</dd></dl>
+        <h3 style="margin-top:10px">Logo</h3><div class="aide">Affiché sur la fiche du groupe (« logo.png »).</div>${bandeImages('logo', g.images.logo, 'logo')}
+        <h3>Vignette du groupe</h3><div class="aide">« folder.jpg » dans le dossier du groupe.</div>${bandeImages('', g.images.vignette, 'vignette')}
+        <h3>Bannière</h3><div class="aide">« banner.jpg ».</div>${bandeImages('banniere', g.images.banniere, 'banniere')}
+        <h3>Fonds d'écran</h3><div class="aide">${g.fanart.libres} place(s) libre(s) (« fanart.jpg » puis « extrafanart/ »). Les fonds déjà là ne sont jamais remplacés. Coche ceux que tu veux : ${choisisFonds.length} / ${g.fanart.libres}.</div>
+        <div class="bande">${fonds || '<div class="muted" style="padding:10px">Aucun fond trouvé.</div>'}</div>
+      </section>
+      <section class="fi"><h3>💿 L'album : ${esc(c.album)}</h3>
+        <h3 style="margin-top:6px">Pochette</h3><div class="aide">« folder.jpg » dans le dossier de l'album.</div>${bandeImages('carre', f.album.couverture, 'album_couverture')}
+        <h3>CD (cdart)</h3><div class="aide">« cdart.png ».</div>${bandeImages('carre', f.album.cdart, 'album_cdart')}
+      </section>
+      <section class="fi"><h3>📝 Le texte (biographie du groupe)</h3>
+        <div class="aide">Écrit dans « artist.nfo » (langue : ${esc(g.biographie_langue || 'inconnue')}). Tu peux le corriger avant de ranger.${g.artist_nfo_existe ? ' <b>artist.nfo existe déjà : il ne sera pas modifié.</b>' : ''}</div>
+        <textarea class="fi-bio" id="ficheBio" spellcheck="false">${esc(g.biographie)}</textarea>
+        <div style="margin-top:6px"><button class="btn small ghost" id="ficheBioReset">↺ Texte d'origine</button></div>
+      </section>
+      <section class="fi"><h3>📄 Fichiers .nfo</h3>
+        <details><summary style="cursor:pointer">Voir le .nfo du clip</summary><div class="fi-nfo">${esc(c.nfo)}</div></details>
+      </section>
+      <section class="fi"><h3>📋 Ce qui sera créé dans « Video clip »</h3>
+        <ul class="fi-plan">${f.plan.map(l => `<li>${l.type === 'dossier' ? '📁 ' : ''}${l.existe ? (l.remplacer ? '♻️ <b>remplacé</b> (ancien sauvegardé) : ' : '⏭️ existe déjà, conservé : ') : '＋ <b>créé</b> : '}${esc(l.chemin)}</li>`).join('')}</ul>
+      </section>
+    </div>`;
+    const nouveaux = f.plan.filter(l => l.type !== 'dossier' && !l.existe).length, gardes = f.plan.filter(l => l.type !== 'dossier' && l.existe && !l.remplacer).length, remp = f.plan.filter(l => l.remplacer).length;
+    $('ficheResume').innerHTML = `${nouveaux} fichier(s) créé(s)${remp ? ' · ' + remp + ' remplacé(s)' : ''}${gardes ? ' · ' + gardes + ' conservé(s)' : ''}`;
+    // événements
+    const corps = $('ficheCorps');
+    corps.querySelectorAll('[data-fermer]').forEach(b => b.onclick = fermerFiche);
+    corps.querySelectorAll('[data-poster]').forEach(b => b.onclick = () => choixFiche({poster: b.dataset.poster}));
+    corps.querySelectorAll('[data-cle]').forEach(b => b.onclick = () => {
+        const cle = b.dataset.cle, u = b.dataset.url, valeur = u === '__garder__' ? null : u;
+        if (cle.startsWith('album_')) choixFiche({album: {[cle.slice(6)]: valeur}}); else choixFiche({images: {[cle]: valeur}});
+    });
+    corps.querySelectorAll('[data-fond]').forEach(b => b.onclick = () => {
+        let liste = (g.fanart.choisis === null ? g.fanart.candidats.slice(0, g.fanart.libres).map(x => x.url) : g.fanart.choisis).slice();
+        const u = b.dataset.fond, i = liste.indexOf(u);
+        if (i >= 0) liste.splice(i, 1); else if (liste.length < g.fanart.libres) liste.push(u); else return note('Toutes les places libres sont prises : décoche un fond d’abord.', 'warn');
+        choixFiche({images: {fanart: liste}});
+    });
+    const bio = $('ficheBio'); if (bio) bio.onchange = () => choixFiche({biographie: bio.value === g.biographie_defaut ? null : bio.value}, true);
+    $('ficheBioReset').onclick = () => choixFiche({biographie: null});
+}
+async function choixFiche(corps, garderDefilement) {
+    const y = $('fiche').scrollTop;
+    const d = await post('/api/travaux/' + FI.id + '/choix', corps);
+    if (d.error) return note(d.error, 'err');
+    FI = d; rendreFiche(); $('fiche').scrollTop = y;
+}
+async function ouvrirFiche(id) {
+    note('Ouverture de la fiche…');
+    const d = await api('/api/travaux/' + id + '/fiche');
+    if (d.error) return note(d.error, 'err');
+    note(''); FI = d; rendreFiche();
+    $('fiche').classList.add('ouvert'); $('fiche').scrollTop = 0; document.body.style.overflow = 'hidden';
+}
+function fermerFiche() { $('fiche').classList.remove('ouvert'); document.body.style.overflow = ''; FI = null; suivreTravaux(); }
+$('ficheFermer').onclick = fermerFiche;
+$('ficheRanger').onclick = async () => { if (!FI) return; const id = FI.id, nom = FI.clip.titre; if (await rangerClip(id, nom)) fermerFiche(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('fiche').classList.contains('ouvert')) fermerFiche(); });
+
 function resumeTravaux(liste) {
     const actifs = liste.filter(t => ['attente', 'telechargement', 'audio'].includes(t.etat)), prets = liste.filter(t => t.etat === 'pret'),
           erreurs = liste.filter(t => t.etat === 'erreur'), ranges = liste.filter(t => t.etat === 'range');
@@ -314,23 +513,24 @@ function carteTravail(t) {
     const actif = ['attente', 'telechargement', 'audio'].includes(t.etat);
     const pill = {attente: '<span class="pill">en attente</span>', telechargement: '<span class="pill warn">téléchargement</span>', audio: '<span class="pill warn">volume</span>',
                   pret: '<span class="pill ok">prêt à ranger</span>', range: '<span class="pill ok">✅ rangé</span>', erreur: '<span class="pill err">erreur</span>'}[t.etat] || '';
-    const plan = (t.plan || []).map(l => `<li>${l.existe ? '⏭️ existe déjà : ' : '＋ '}${esc(l.chemin)}</li>`).join('');
-    return `<div class="job"><div class="titre">${esc(t.groupe)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> ${pill}</div>
+    return `<div class="job"><div class="titre">${esc(t.groupe)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> ${pill}${t.qualite ? ' <span class="pill">' + esc(t.qualite) + '</span>' : ''}</div>
         ${actif ? `<div class="barre"><i style="width:${t.progres || 0}%"></i></div>` : ''}
         <div class="muted">${esc(t.message || '')}</div>
-        ${t.etat === 'pret' ? `<div id="plan${t.id}" hidden><div class="muted" style="margin-top:6px">Ce qui sera créé dans « Video clip » :</div><ul>${plan}</ul></div>` : ''}
+        
         <div class="acts">
-        ${t.etat === 'pret' ? `<button class="btn small ghost" data-plan="${t.id}">📋 Voir ce qui sera créé</button><button class="btn small" data-ranger="${t.id}" data-nom="${esc(t.titre)}">📁 Ranger dans Video clip</button>` : ''}
+        ${t.etat === 'pret' ? `<button class="btn small" data-fiche="${t.id}">🧾 Ouvrir la fiche (images, textes, infos)</button><button class="btn small ghost" data-ranger="${t.id}" data-nom="${esc(t.titre)}">📁 Ranger tout de suite</button>` : ''}
         ${t.etat === 'erreur' ? `<button class="btn small" data-relancer="${t.id}">↻ Relancer</button>` : ''}
         ${actif ? '' : `<button class="btn small ghost" data-retirer="${t.id}">Retirer de la liste</button>`}</div></div>`;
 }
-async function ranger(id, nom) {
-    if (!await MouConfirm(`Ranger « ${nom} » dans « Video clip » ?\n\nLe clip, son .nfo, son poster et les images du groupe qui manquent seront créés. Rien d'existant n'est remplacé.`, {ok: 'Ranger', annuler: 'Pas maintenant'})) return;
+async function rangerClip(id, nom) {
+    if (!await MouConfirm(`Ranger « ${nom} » dans « Video clip » ?\n\nLe clip, son .nfo, son poster et les images choisies seront créés. Les fichiers déjà là sont conservés (sauf une image que tu as choisi de remplacer : l'ancienne est sauvegardée).`, {ok: 'Ranger', annuler: 'Pas maintenant'})) return false;
     note('Rangement…');
     const r = await post('/api/travaux/' + id + '/ranger');
     note(r.ok ? 'Rangé. ' + (r.emby || '') : (r.error || 'Rangement impossible.'), r.ok ? '' : 'err');
     suivreTravaux();
+    return !!r.ok;
 }
+async function ranger(id, nom) { return rangerClip(id, nom); }
 $('chercher').addEventListener('click', chercher);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') chercher(); });
 suivreTravaux();
