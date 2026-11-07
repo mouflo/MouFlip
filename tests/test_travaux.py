@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import audio, images_perso, nfo, rangement, sources, telechargement, travaux  # noqa: E402
+from src import audio, convention, images_perso, nfo, rangement, sources, telechargement, travaux  # noqa: E402
 
 
 def setUpModule():
@@ -690,6 +690,59 @@ class ImagesPersoTest(unittest.TestCase):
             octets, nom = images_perso.telecharger("https://exemple.fr/dossier/pochette.png")
         self.assertEqual(nom, "pochette.png")
         self.assertTrue(octets.startswith(b"\x89PNG"))
+
+
+class ConventionTest(unittest.TestCase):
+    """Clips déjà rangés : poster = pochette carrée de l'album, ancienne image 16:9 = vignette « -thumb.jpg », directement sur les dossiers."""
+
+    def setUp(self):
+        from PIL import Image
+        self.Image = Image
+        self.tmp = Path(tempfile.mkdtemp())
+        self.groupe = self.tmp / "aespa"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _album(self, nom, titre="T", poster=(1280, 720), folder=(1000, 1000), couleur_poster=(10, 50, 90)):
+        a = self.groupe / nom
+        a.mkdir(parents=True, exist_ok=True)
+        (a / f"aespa - {nom} - {titre}.mkv").write_bytes(b"V")
+        if poster:
+            self.Image.new("RGB", poster, couleur_poster).save(a / f"aespa - {nom} - {titre}-poster.jpg")
+        if folder:
+            self.Image.new("RGB", folder, (200, 20, 20)).save(a / "folder.jpg")
+        return a
+
+    def test_analyse_en_lecture_seule_et_selection_des_clips(self):
+        self._album("A")                                                           # 16:9 + pochette carrée : à faire
+        self._album("B", folder=(1280, 720))                                       # pas de pochette carrée : jamais touché
+        self._album("C", folder=None)                                              # pas de pochette : rien à faire
+        a = self._album("D", poster=(1000, 1000))                                  # poster carré différent de la pochette : à remplacer, pas de vignette à créer
+        (self.groupe / "@eaDir" / "x").mkdir(parents=True)
+        avant = sorted(str(p) for p in self.groupe.rglob("*"))
+        lot = convention.analyser(self.groupe)
+        self.assertEqual(sorted((e["album"], e["vignette"], e["remplacer"]) for e in lot), [("A", True, True), ("D", False, True)])
+        self.assertEqual(sorted(str(p) for p in self.groupe.rglob("*")), avant)    # l'analyse ne modifie rien
+        self.assertEqual(convention.analyser(self.tmp / "inexistant"), [])
+
+    def test_application_avec_sauvegarde_et_idempotence(self):
+        a = self._album("A")
+        ancien = (a / "aespa - A - T-poster.jpg").read_bytes()
+        r = convention.appliquer(self.groupe, self.tmp / "sauv")
+        self.assertEqual((r["total"], len(r["faits"]), r["erreurs"]), (1, 1, []))
+        self.assertEqual((a / "aespa - A - T-thumb.jpg").read_bytes(), ancien)                               # l'ancienne image devient la vignette
+        self.assertEqual((a / "aespa - A - T-poster.jpg").read_bytes(), (a / "folder.jpg").read_bytes())      # poster = pochette
+        self.assertEqual([x.read_bytes() for x in (self.tmp / "sauv").rglob("*poster.jpg")], [ancien])        # ancien poster sauvegardé
+        self.assertEqual(self.Image.open(a / "aespa - A - T-thumb.jpg").size, (1280, 720))
+        self.assertEqual(convention.appliquer(self.groupe, self.tmp / "sauv")["total"], 0)                    # 2e passage : plus rien à faire
+
+    def test_une_vignette_deja_la_n_est_jamais_ecrasee(self):
+        a = self._album("A")
+        (a / "aespa - A - T-thumb.jpg").write_bytes(b"MA VIGNETTE")
+        convention.appliquer(self.groupe, self.tmp / "sauv")
+        self.assertEqual((a / "aespa - A - T-thumb.jpg").read_bytes(), b"MA VIGNETTE")                       # la vignette existante est respectée
+        self.assertEqual((a / "aespa - A - T-poster.jpg").read_bytes(), (a / "folder.jpg").read_bytes())
 
 
 class QualitesTest(unittest.TestCase):

@@ -535,6 +535,27 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(self.c.get(f"/api/perso/{self.MB}/../../etc/passwd").status_code, 404)
         images_perso.configurer(self.A.BASE_DIR / "data")
 
+    def test_convention_par_groupe_apercu_puis_application(self):
+        from PIL import Image
+        album = self.racine / "BLACKPINK" / "BORN PINK"
+        album.mkdir(parents=True, exist_ok=True)
+        (album / "BLACKPINK - BORN PINK - Shut Down.mkv").write_bytes(b"V")
+        Image.new("RGB", (1280, 720), (1, 2, 3)).save(album / "BLACKPINK - BORN PINK - Shut Down-poster.jpg")
+        Image.new("RGB", (1000, 1000), (9, 9, 9)).save(album / "folder.jpg")
+        fich = self.A.CACHE_DIR / "groupes" / f"{self.MB}.json"
+        fich.parent.mkdir(parents=True, exist_ok=True)
+        fich.write_text(json.dumps({"fiche": {"nom": "BLACKPINK", "alias": []}, "clips": []}))
+        with mock.patch.object(self.A.rangement, "prevenir_emby", return_value="Emby est prévenu."):
+            g = self.c.get("/api/convention/" + self.MB).get_json()
+            self.assertEqual([(c["titre"], c["album"], c["vignette"]) for c in g["clips"]], [("Shut Down", "BORN PINK", True)])
+            self.assertFalse((album / "BLACKPINK - BORN PINK - Shut Down-thumb.jpg").exists())          # l'aperçu ne modifie rien
+            with mock.patch.object(self.A, "BASE_DIR", Path(self.tmp.name)):
+                r = self.c.post("/api/convention/" + self.MB).get_json()
+        self.assertEqual((r["ok"], len(r["faits"]), r["emby"]), (True, 1, "Emby est prévenu."))
+        self.assertTrue((album / "BLACKPINK - BORN PINK - Shut Down-thumb.jpg").exists())
+        self.assertEqual(self.c.get("/api/convention/" + self.MB).get_json()["clips"], [])                # plus rien à faire ensuite
+        self.assertEqual(self.c.get("/api/convention/11111111-2222-3333-4444-555555555555").status_code, 404)     # groupe inconnu ou sans dossier
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)
@@ -542,6 +563,26 @@ class RoutesTest(unittest.TestCase):
         self.assertIn("yt_dlp", o)
         self.assertEqual(self.c.post("/api/settings/dossier", json={"dossier": "/nexiste/pas"}).status_code, 400)
 
+
+
+class TitreEntreParenthesesTest(unittest.TestCase):
+    """Cas LED Apple : « LEDApple(레드애플) _ Let the wind blow(바람아 불어라) MV » n'était pas reconnue comme « 바람아 불어라 » (le titre coréen est entre parenthèses)."""
+    VIDEO = {"id": "fbkixXucdIw", "title": "LEDApple(레드애플) _ Let the wind blow(바람아 불어라) MV", "channel": "1theK (원더케이)", "channel_id": "UCweOkPb1wVVH0Q0Tlj4a5Pw", "duration": 220}
+
+    def test_le_titre_cherche_est_retrouve_meme_entre_parentheses(self):
+        for titre in ("바람아 불어라", "Let the wind blow"):
+            c = formats.candidats("Led Apple", titre, lambda q, o: {"entries": [self.VIDEO]})
+            self.assertEqual([x["id"] for x in c], ["fbkixXucdIw"], titre)
+            self.assertTrue(c[0]["officielle"])                                        # 1theK est un label reconnu
+        v2 = {**self.VIDEO, "title": "바람아 불어라 (Let the wind blow) MV"}
+        self.assertEqual(len(formats.candidats("Led Apple", "Let the wind blow", lambda q, o: {"entries": [v2]})), 1)     # et dans l'autre sens
+
+    def test_pas_de_faux_positif(self):
+        self.assertEqual(formats.candidats("Led Apple", "Autre chanson", lambda q, o: {"entries": [self.VIDEO]}), [])
+
+    def test_un_titre_entre_parentheses_ne_contourne_pas_les_exclusions(self):
+        v = {**self.VIDEO, "title": "LEDApple(레드애플) _ Let the wind blow(바람아 불어라) Dance Practice"}
+        self.assertEqual(formats.candidats("Led Apple", "바람아 불어라", lambda q, o: {"entries": [v]}), [])
 
 
 class OfficielSeulementTest(unittest.TestCase):

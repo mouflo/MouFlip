@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from src import audio, formats, images_perso, nfo, noms, rangement, telechargement
+from src import audio, convention, formats, images_perso, nfo, noms, rangement, telechargement
 
 logger = logging.getLogger(__name__)
 
@@ -635,41 +635,29 @@ def ajouter_image(tid, type_, octets: bytes, nom: str = ""):
 
 
 def mettre_a_la_convention(tid) -> dict:
-    """Pour un clip DÉJÀ rangé : le poster devient la pochette de l'album (comme le reste de la médiathèque) et l'ancienne image du clip (16:9) devient sa
-    vignette « …-thumb.jpg ». Rien d'autre n'est touché ; l'ancien poster est sauvegardé d'abord ; Emby est prévenu. Retourne {ok, message}."""
-    from PIL import Image
+    """Pour un clip DÉJÀ rangé de la liste : voir `convention` (poster = pochette de l'album, ancienne image 16:9 = vignette). Retourne {ok, message}."""
     with _VERROU:
         c = TRAVAUX.get(tid)
     if not c or c["etat"] != "range":
         return {"ok": False, "error": "Ce clip n'est pas rangé."}
-    lignes = c.get("plan") or []
-    video = next((Path(l["chemin"]) for l in lignes if l["type"] == "video"), None)
+    video = next((Path(l["chemin"]) for l in (c.get("plan") or []) if l["type"] == "video"), None)
     if not video or not video.exists():
         return {"ok": False, "error": "Le clip rangé est introuvable (le partage est-il monté ?). Rien n'a été modifié."}
-    album, stem = video.parent, video.stem
-    poster, thumb, dossier_img = album / f"{stem}-poster.jpg", album / f"{stem}-thumb.jpg", album / "folder.jpg"
-    if not poster.exists() or not dossier_img.exists():
-        return {"ok": False, "error": "Il manque le poster ou la pochette de l'album : rien n'a été modifié."}
-    def forme(p):
-        with Image.open(p) as im:
-            return im.size
-    lp, hp = forme(poster)
-    lf, hf = forme(dossier_img)
-    if not 0.8 <= lf / hf <= 1.25:
-        return {"ok": False, "error": f"L'image de l'album n'est pas une pochette carrée ({lf}×{hf}) : rien n'a été modifié."}
-    faits = []
-    if lp / hp >= 1.4 and not thumb.exists():                          # l'ancien poster est l'image paysage du clip : elle devient la vignette
-        thumb.write_bytes(poster.read_bytes())
-        faits.append("vignette « -thumb.jpg » créée avec l'ancienne image du clip")
-    if poster.read_bytes() != dossier_img.read_bytes():
-        sauv = _CFG["dossier"].parent / "sauvegardes" / time.strftime("%Y-%m-%d_%H%M%S")
-        sauv.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(poster, sauv / f"{album.name} - {poster.name}")
-        poster.write_bytes(dossier_img.read_bytes())
-        faits.append("poster remplacé par la pochette de l'album (l'ancien est sauvegardé)")
-    if not faits:
+    e = convention.examiner(video)
+    if e is None:
+        poster, folder = video.parent / f"{video.stem}-poster.jpg", video.parent / "folder.jpg"
+        if not poster.exists() or not folder.exists():
+            return {"ok": False, "error": "Il manque le poster ou la pochette de l'album : rien n'a été modifié."}
+        try:
+            from PIL import Image
+            with Image.open(folder) as im:
+                if not 0.8 <= im.size[0] / im.size[1] <= 1.25:
+                    return {"ok": False, "error": f"L'image de l'album n'est pas une pochette carrée ({im.size[0]}×{im.size[1]}) : rien n'a été modifié."}
+        except OSError:
+            pass
         return {"ok": True, "message": "Déjà à la convention : rien à faire."}
-    emby = rangement.prevenir_emby(_CFG["emby"], str(album.parent))
+    faits = convention.appliquer_un(e, _CFG["dossier"].parent / "sauvegardes")
+    emby = rangement.prevenir_emby(_CFG["emby"], str(video.parent.parent))
     return {"ok": True, "message": "; ".join(faits).capitalize() + ". " + emby}
 
 

@@ -20,6 +20,13 @@ def normaliser(texte: str) -> str:
     return " ".join(t.split())
 
 
+def plat(texte: str) -> str:
+    """Comme `normaliser` mais SANS retirer ce qui est entre parenthèses : « Let the wind blow(바람아 불어라) » garde les deux titres. Sert à retrouver un titre
+    dans celui d'une vidéo, qui met souvent le titre coréen ou anglais entre parenthèses."""
+    t = sans_accents(str(texte or "")).lower()
+    return " ".join(re.sub(r"[^\w\s]|_", " ", t, flags=re.UNICODE).split())
+
+
 def propre(nom: str) -> str:
     """Un nom utilisable comme fichier ou dossier sur le NAS (pas de / : * ? « < > |)."""
     nom = str(nom or "").replace(":", " -").replace("/", "-").replace("\\", "-")

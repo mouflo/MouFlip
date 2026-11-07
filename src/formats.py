@@ -5,7 +5,7 @@ import logging
 import re
 
 from src import ytcookies
-from src.noms import normaliser
+from src.noms import normaliser, plat
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,11 @@ def _note(c: dict, groupe: str, titre: str, chaines=()) -> int:
     t = c.get("title") or ""
     nt, ng = normaliser(t), normaliser(groupe)
     note = 0
-    if normaliser(titre) and normaliser(titre) in nt:
+    nm = normaliser(titre)
+    trouve = bool(nm) and nm in nt
+    if not trouve and plat(titre):                           # le titre peut être entre parenthèses dans la vidéo : « Let the wind blow(바람아 불어라) »
+        trouve = (" " + plat(titre) + " ") in (" " + plat(t) + " ")
+    if trouve:
         note += 40
     else:
         return -100                                          # le titre du clip n'apparaît pas : autre chose

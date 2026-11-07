@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import audio, chaines, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
+from src import audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -62,6 +62,7 @@ logger = logging.getLogger("mouflip")
 auth.init_app(app, APP_VERSION)
 import compression
 compression.init_app(app)
+from src import rangement
 import apparence
 apparence.init_app(app)
 
@@ -606,6 +607,31 @@ def api_emby_artiste():
 def api_travaux_ranger(tid):
     r = travaux.ranger(tid)
     return jsonify(r), (200 if r.get("ok") else 409)
+
+
+def _dossier_groupe_local(mbid: str) -> str:
+    """Le dossier du groupe dans « Video clip » (lecture locale seulement : la liste enregistrée du groupe, aucune requête sur Internet)."""
+    base = _lire_json(CACHE_DIR / "groupes" / f"{mbid}.json") or {}
+    fiche = base.get("fiche") or {}
+    d = existants.dossier_du_groupe(DOSSIER_CLIPS, [fiche.get("nom", "")] + list(fiche.get("alias", [])))
+    return str(d) if d else ""
+
+
+@app.route("/api/convention/<mbid>", methods=["GET", "POST"])
+def api_convention_groupe(mbid):
+    """Clips DÉJÀ rangés d'un groupe (peu importe la liste de MouFlip) : GET = ce qui serait fait (rien n'est modifié) ; POST = le faire, avec sauvegarde."""
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        return jsonify({"error": "Groupe invalide."}), 400
+    dossier = _dossier_groupe_local(mbid)
+    if not dossier:
+        return jsonify({"error": "Ce groupe n'a pas encore de dossier dans « Video clip »."}), 404
+    if request.method == "GET":
+        lot = convention.analyser(dossier)
+        return jsonify({"dossier": dossier, "clips": [{"titre": e["titre"], "album": e["album"], "vignette": e["vignette"], "remplacer": e["remplacer"]} for e in lot]})
+    r = convention.appliquer(dossier, BASE_DIR / "data" / "sauvegardes")
+    if r["faits"]:
+        r["emby"] = rangement.prevenir_emby(EMBY, dossier)
+    return jsonify({"ok": True, **r})
 
 
 @app.route("/api/travaux/convention", methods=["POST"])

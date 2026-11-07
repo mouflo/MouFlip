@@ -256,6 +256,7 @@ function dessiner() {
             </div></div>
         ${G.biographie ? `<div class="bio" id="bio">${esc(G.biographie)}</div><a href="#" id="bioPlus" class="muted">Lire la suite</a>` : ''}
         ${(G.erreurs || []).map(e => `<div class="note warn">⚠️ ${esc(e)}</div>`).join('')}
+        ${G.dossier_groupe ? `<div style="margin-top:10px"><button class="btn ghost small" id="conventionGroupe" title="Poster = pochette de l’album, vignette « -thumb.jpg » = ancienne image du clip">🖼️ Mettre les clips déjà rangés de ce groupe à ma façon</button></div>` : ''}
         <details class="ajout" id="chainesBloc"><summary>📺 Sources officielles : chaînes et playlists YouTube (${(G.chaines || []).length})</summary>
             <div class="aide" style="margin:8px 0">Une vidéo publiée par une de ces chaînes est reconnue « officielle », et leurs vidéos servent à retrouver des clips. Une <b>playlist</b> officielle (par exemple « Music Videos » d'une chaîne) est encore mieux : c'est la liste exacte des clips. Un artiste solo reprend les sources de son groupe (YUQI → i-dle). MusicBrainz en connaît souvent ; ajoute celle du label ou une playlist si besoin.</div>
             <div id="chainesListe">${(G.chaines || []).map(ch => `<div class="chaine"><a href="${esc(ch.url)}" target="_blank" rel="noopener">${ch.type === 'playlist' ? '🎞️ Playlist' : '📺 Chaîne'} · ${esc(ch.nom || ch.id)}</a> <span class="pill">${esc(ch.source)}</span>${ch.source === 'toi' ? ` <a href="#" data-retirer-chaine="${esc(ch.id)}">✕ retirer</a>` : ''}</div>`).join('') || '<div class="muted">Aucune chaîne connue pour ce groupe.</div>'}</div>
@@ -320,6 +321,7 @@ function dessiner() {
         };
         document.querySelectorAll('[data-retirer-chaine]').forEach(a => a.onclick = async e => { e.preventDefault(); const r = await post('/api/chaines/retirer', {mbid: G.fiche.mbid, id: a.dataset.retirerChaine}); G.chaines = r.chaines || []; dessiner(); });
     }
+    if ($('conventionGroupe')) $('conventionGroupe').onclick = conventionGroupe;
     $('ajoutChercher').onclick = ajoutLire;
     $('ajoutLien').onkeydown = e => { if (e.key === 'Enter') ajoutLire(); };
     $('lireFormats').onclick = lireFormats;
@@ -501,6 +503,17 @@ function selectionnerSeul(titre) {
     const cible = lignes.find(el => el.dataset.t === titre);
     if (cible) { cible.scrollIntoView({behavior: 'smooth', block: 'center'}); cible.classList.add('nouveau'); setTimeout(() => cible.classList.remove('nouveau'), 4000); }
 }
+async function conventionGroupe() {                                      // poster = pochette de l'album, vignette -thumb.jpg = ancienne image du clip, pour les clips DÉJÀ rangés
+    const r = await api('/api/convention/' + G.fiche.mbid);
+    if (r.error) return note(r.error, 'warn');
+    if (!r.clips.length) return note('Les clips rangés de ' + G.fiche.nom + ' sont déjà à ta façon : poster = pochette de l’album.');
+    const liste = r.clips.slice(0, 12).map(c => '• ' + c.titre + ' (' + c.album + ')').join('\n') + (r.clips.length > 12 ? '\n… et ' + (r.clips.length - 12) + ' autres' : '');
+    if (!await MouConfirm(`${r.clips.length} clip(s) de ${G.fiche.nom} ont encore leur image 16:9 comme poster :\n\n${liste}\n\nLe poster devient la pochette de l’album, et l’ancienne image devient la vignette « -thumb.jpg ». Les anciens posters sont sauvegardés.`, {ok: 'Mettre à jour', annuler: 'Annuler'})) return;
+    note('Mise à jour des clips…');
+    const x = await post('/api/convention/' + G.fiche.mbid);
+    if (x.error) return note(x.error, 'err');
+    note(`${x.faits.length} clip(s) mis à jour${x.erreurs.length ? ', ' + x.erreurs.length + ' en erreur : ' + x.erreurs.map(e => e[0] + ' (' + e[1] + ')').join(' ; ') : ''}. ${x.emby || ''}`, x.erreurs.length ? 'warn' : '');
+}
 async function corrigerClip(i) {                                                        // « ✏️ Corriger l'album ou l'année » : rouvre le formulaire d'ajout avec les valeurs du clip
     const c = filtreClips()[i]; if (!c) return;
     const bloc = $('ajoutBloc'); bloc.open = true;
@@ -547,22 +560,10 @@ async function suivreTravaux() {
     const liste = d.travaux || [];
     $('travaux').hidden = !liste.length;
     resumeTravaux(liste);
-    const rangesN = liste.filter(t => t.etat === 'range').length;
-    $('travauxListe').innerHTML = (rangesN ? `<div class="acts" style="margin:8px 0"><button class="btn small ghost" id="conventionTous">🖼️ Mettre les ${rangesN} clip(s) rangé(s) à ma façon : poster = pochette, vignette = image du clip</button></div>` : '') + (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
+    $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
     ajusterBas();
     document.querySelectorAll('[data-fiche]').forEach(b => b.onclick = () => ouvrirFiche(b.dataset.fiche));
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
-    if ($('conventionTous')) $('conventionTous').onclick = async () => {
-        if (!await MouConfirm('Mettre tous les clips rangés à ta façon de faire ?\n\nPour chacun : le poster devient la pochette de l’album, et son ancienne image (16:9) devient sa vignette « -thumb.jpg ». Les anciens posters sont sauvegardés. Un clip sans pochette carrée n’est pas touché.', {ok: 'Mettre à jour', annuler: 'Annuler'})) return;
-        note('Mise à jour des clips rangés…');
-        const r = await post('/api/travaux/convention');
-        note(`${r.faits} clip(s) mis à jour, ${r.deja} déjà bien${(r.refuses || []).length ? ', ' + r.refuses.length + ' non touché(s) : ' + r.refuses.map(x => x[0] + ' (' + x[1] + ')').join(' ; ') : ''}.`, (r.refuses || []).length ? 'warn' : '');
-    };
-    document.querySelectorAll('[data-convention]').forEach(b => b.onclick = async () => {
-        if (!await MouConfirm('Mettre ce clip à ta façon de faire ?\n\nSon poster devient la pochette de l’album, et son ancienne image (16:9) devient sa vignette « -thumb.jpg ». L’ancien poster est sauvegardé.', {ok: 'Mettre à jour', annuler: 'Annuler'})) return;
-        const r = await post('/api/travaux/' + b.dataset.convention + '/convention');
-        note(r.message || r.error || 'Fait.', r.ok ? '' : 'err'); suivreTravaux();
-    });
     document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
     document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
     if (liste.some(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
@@ -769,7 +770,6 @@ function carteTravail(t) {
         <div class="acts">
         ${t.etat === 'pret' ? `<button class="btn small" data-fiche="${t.id}">🧾 Ouvrir la fiche (images, textes, infos)</button><button class="btn small ghost" data-ranger="${t.id}" data-nom="${esc(t.titre)}">📁 Ranger tout de suite</button>` : ''}
         ${t.etat === 'erreur' ? `<button class="btn small" data-relancer="${t.id}">↻ Relancer</button>` : ''}
-        ${t.etat === 'range' ? `<button class="btn small ghost" data-convention="${t.id}" title="Poster = pochette de l’album, vignette = image du clip">🖼️ Poster = pochette</button>` : ''}
         ${actif ? '' : `<button class="btn small ghost" data-retirer="${t.id}">Retirer de la liste</button>`}</div></div>`;
 }
 async function rangerClip(id, nom) {
