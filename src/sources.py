@@ -62,14 +62,44 @@ def _get(url, params=None, max_essais=5):
     raise SourceIndisponible(f"{url.split('/')[2]} ne répond pas ({derniere})")
 
 
-def chercher_groupes(nom: str, limite: int = 6) -> list[dict]:
-    d = _get(f"{MB}/artist", {"query": f'artist:"{nom}" OR alias:"{nom}"', "fmt": "json", "limit": limite}) or {}
-    sortie = []
+RE_MBID = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", re.I)
+
+
+def mbid_dans(texte: str) -> str:
+    """L'identifiant MusicBrainz contenu dans un texte (adresse de la fiche https://musicbrainz.org/artist/… ou identifiant seul), sinon ''."""
+    m = RE_MBID.search(texte or "")
+    return m.group(1).lower() if m else ""
+
+
+def _lucene(texte: str) -> str:
+    """Le texte cherché, sans que « (G)I-DLE » ou « AC/DC » soient pris pour des opérateurs de recherche."""
+    return re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r"\\\1", texte)
+
+
+def _resume_artiste(a: dict) -> dict:
+    return {"mbid": a["id"], "nom": a.get("name", ""), "type": a.get("type", ""), "pays": a.get("country", "") or (a.get("area") or {}).get("name", ""),
+            "precision": a.get("disambiguation", ""), "score": a.get("score", 100), "debut": ((a.get("life-span") or {}).get("begin") or "")[:4]}
+
+
+def artiste_par_mbid(mbid: str) -> dict | None:
+    """Un artiste d'après l'identifiant de sa fiche MusicBrainz (adresse collée dans la recherche). None si cette fiche n'existe pas."""
+    d = _get(f"{MB}/artist/{mbid}", {"fmt": "json"})
+    return _resume_artiste(d) if d and d.get("id") else None
+
+
+def chercher_groupes(nom: str, limite: int = 30) -> list[dict]:
+    """Les artistes dont le nom est celui qu'on cherche d'abord (même écriture ou même alias, puis nom qui commence ainsi), puis les autres par pertinence.
+    Avant, la recherche renvoyait « tous les artistes dont le nom contient ALI » (Nusrat Fateh Ali Khan, Brother Ali…) et le groupe ALI n'apparaissait pas."""
+    d = _get(f"{MB}/artist", {"query": _lucene(nom), "fmt": "json", "limit": 40}) or {}
+    voulu = normaliser(nom) or nom.lower()
+    resultats = []
     for a in d.get("artists", []):
-        sortie.append({"mbid": a["id"], "nom": a.get("name", ""), "type": a.get("type", ""), "pays": a.get("country", "") or (a.get("area") or {}).get("name", ""),
-                       "precision": a.get("disambiguation", ""), "score": a.get("score", 0),
-                       "debut": ((a.get("life-span") or {}).get("begin") or "")[:4]})
-    return sortie
+        noms = [a.get("name", "")] + [x.get("name", "") for x in a.get("aliases", []) or []]
+        normes = [normaliser(x) or x.lower() for x in noms if x]
+        rang = 0 if voulu in normes else 1 if any(n.startswith(voulu + " ") or n.startswith(voulu) for n in normes[:1]) else 2
+        resultats.append((rang, -(a.get("score") or 0), _resume_artiste(a)))
+    resultats.sort(key=lambda x: (x[0], x[1]))
+    return [r[2] for r in resultats[:limite]]
 
 
 def fiche_mb(mbid: str) -> dict:

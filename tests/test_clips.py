@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -482,6 +483,23 @@ class RoutesTest(unittest.TestCase):
             self.assertEqual(self.A._ids_chaines(self.MB), {"UCritGVo7pLJLUS8wEu32vow"})
             self.assertEqual(self.A._ids_playlists(self.MB), ["PLG8DKAYW6M264immTa4KjaGkYBF1FHJ5X"])
 
+    def test_recherche_par_adresse_de_fiche_et_anciennes_recherches_enregistrees_ignorees(self):
+        fiche = {"mbid": "a0bb95b8-9fd9-47dd-af28-d4210f7f2a11", "nom": "ALI", "type": "Group", "pays": "JP", "precision": "", "score": 100, "debut": "2016"}
+        with mock.patch.object(sources, "artiste_par_mbid", return_value=fiche):
+            r = self.c.get("/api/groupes/chercher?q=https://musicbrainz.org/artist/a0bb95b8-9fd9-47dd-af28-d4210f7f2a11").get_json()
+        self.assertEqual(([g["nom"] for g in r["groupes"]], r["direct"]), (["ALI"], True))
+        with mock.patch.object(sources, "artiste_par_mbid", return_value=None):
+            r = self.c.get("/api/groupes/chercher?q=a0bb95b8-9fd9-47dd-af28-d4210f7f2a11").get_json()
+        self.assertEqual(r["groupes"], [])
+        self.assertIn("Aucune fiche", r["avertissement"])
+        # une recherche enregistrée par l'ancienne version (clé sans « v2: ») n'est jamais réutilisée
+        self.A.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (self.A.CACHE_DIR / "recherches.json").write_text(json.dumps({"ali": {"date": time.time(), "groupes": [{"mbid": "x", "nom": "Mauvais résultat"}]}}))
+        with mock.patch.object(sources, "chercher_groupes", return_value=[{"mbid": "y", "nom": "ALI"}]) as ch:
+            r = self.c.get("/api/groupes/chercher?q=ali").get_json()
+        self.assertEqual([g["nom"] for g in r["groupes"]], ["ALI"])
+        ch.assert_called_once()
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)
@@ -598,6 +616,45 @@ class VersionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RechercheGroupesTest(unittest.TestCase):
+    @staticmethod
+    def _art(i, nom, score, **k):
+        return {"id": f"0000000{i}-0000-0000-0000-000000000000", "name": nom, "score": score, **k}
+
+    def test_le_nom_exact_passe_avant_les_noms_qui_le_contiennent(self):
+        """Bug vu : « ALI » renvoyait Nusrat Fateh Ali Khan, Brother Ali… et le groupe ALI n'apparaissait pas."""
+        reponse = {"artists": [self._art(1, "Nusrat Fateh Ali Khan", 100), self._art(2, "Brother Ali", 95), self._art(3, "Ali Shaheed Muhammad", 93),
+                               self._art(4, "ALI", 92, type="Group", country="JP", disambiguation="ALIEN LIBERTY INTERNATIONAL")]}
+        with mock.patch.object(sources, "_get", return_value=reponse):
+            r = sources.chercher_groupes("ALI")
+        self.assertEqual(r[0]["nom"], "ALI")
+        self.assertEqual((r[0]["pays"], r[0]["precision"]), ("JP", "ALIEN LIBERTY INTERNATIONAL"))
+        self.assertEqual([x["nom"] for x in r[1:]], ["Ali Shaheed Muhammad", "Nusrat Fateh Ali Khan", "Brother Ali"])       # puis ceux qui COMMENCENT par ce nom, puis les autres par pertinence
+
+    def test_alias_et_ecritures_voisines(self):
+        reponse = {"artists": [self._art(1, "Quelqu'un d'autre", 100), self._art(2, "i‐dle", 90, aliases=[{"name": "(G)I-DLE"}, {"name": "아이들"}])]}
+        with mock.patch.object(sources, "_get", return_value=reponse):
+            self.assertEqual(sources.chercher_groupes("(G)I-DLE")[0]["nom"], "i‐dle")                  # trouvé par son alias
+            self.assertEqual(sources.chercher_groupes("아이들")[0]["nom"], "i‐dle")
+
+    def test_la_requete_ne_confond_pas_la_ponctuation_avec_des_operateurs(self):
+        self.assertEqual(sources._lucene("(G)I-DLE"), r"\(G\)I\-DLE")
+        self.assertEqual(sources._lucene("AC/DC"), r"AC\/DC")
+        with mock.patch.object(sources, "_get", return_value={"artists": []}) as g:
+            sources.chercher_groupes("(G)I-DLE")
+        self.assertEqual(g.call_args.args[1]["query"], r"\(G\)I\-DLE")
+        self.assertEqual(g.call_args.args[1]["limit"], 40)
+
+    def test_adresse_de_fiche_musicbrainz(self):
+        self.assertEqual(sources.mbid_dans("https://musicbrainz.org/artist/a0bb95b8-9fd9-47dd-af28-d4210f7f2a11"), "a0bb95b8-9fd9-47dd-af28-d4210f7f2a11")
+        self.assertEqual(sources.mbid_dans("A0BB95B8-9FD9-47DD-AF28-D4210F7F2A11"), "a0bb95b8-9fd9-47dd-af28-d4210f7f2a11")
+        self.assertEqual(sources.mbid_dans("ALI"), "")
+        with mock.patch.object(sources, "_get", return_value={"id": "a0bb95b8-9fd9-47dd-af28-d4210f7f2a11", "name": "ALI", "type": "Group", "country": "JP"}):
+            self.assertEqual(sources.artiste_par_mbid("a0bb95b8-9fd9-47dd-af28-d4210f7f2a11")["nom"], "ALI")
+        with mock.patch.object(sources, "_get", return_value=None):
+            self.assertIsNone(sources.artiste_par_mbid("a0bb95b8-9fd9-47dd-af28-d4210f7f2a11"))
 
 
 class ChainesTest(unittest.TestCase):

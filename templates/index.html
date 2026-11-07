@@ -161,7 +161,7 @@
     <div id="mou-header" data-app="mouflip" data-prefix="MouFl" data-rest="ip" data-version="{{ version }}" data-settings="1" data-sub="Clips vidéo K-pop pour Emby (lecture seule pour l'instant : rien n'est téléchargé ni rangé)"></div>
 
     <div class="panel">
-        <div class="search-row"><input type="text" id="q" placeholder="Nom du groupe (ex. BLACKPINK, aespa…)" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="chercher">🔎 Chercher</button></div>
+        <div class="search-row"><input type="text" id="q" placeholder="Nom du groupe (ex. BLACKPINK, aespa…) ou adresse de sa fiche MusicBrainz" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="chercher">🔎 Chercher</button></div>
         <div id="cands"></div>
         <div id="msg"></div>
     </div>
@@ -203,9 +203,14 @@ async function chercher() {
     const d = await api('/api/groupes/chercher?q=' + encodeURIComponent(q));
     if (d.error) return note(d.error, 'err');
     note('');
-    if (!(d.groupes || []).length) return note('Aucun groupe trouvé pour « ' + q + ' ».', 'warn');
-    $('cands').innerHTML = d.groupes.map(g => `<div class="cand" data-id="${esc(g.mbid)}"><b>${esc(g.nom)} <small>${esc([g.type, g.pays, g.debut, g.precision].filter(Boolean).join(' · '))}</small></b><span class="pill">${g.score} %</span></div>`).join('');
-    document.querySelectorAll('.cand').forEach(el => el.addEventListener('click', () => ouvrir(el.dataset.id)));
+    if (!(d.groupes || []).length) return note(d.avertissement || ('Aucun groupe trouvé pour « ' + q + ' ». Si tu connais sa fiche MusicBrainz, colle son adresse ici.'), 'warn');
+    const carte = g => `<div class="cand" data-id="${esc(g.mbid)}"><b>${esc(g.nom)} <small>${esc([g.type, g.pays, g.debut, g.precision].filter(Boolean).join(' · '))}</small></b>${d.direct ? '' : `<span class="pill">${g.score} %</span>`}</div>`;
+    const premiers = d.groupes.slice(0, 8), autres = d.groupes.slice(8);
+    $('cands').innerHTML = premiers.map(carte).join('') + (autres.length ? `<div id="plusCands" hidden>${autres.map(carte).join('')}</div><button class="btn ghost small" id="voirPlus" style="margin-top:8px">Voir les ${autres.length} autres résultats</button>` : '')
+        + '<div class="muted" style="margin-top:8px">Ce n’est pas le bon ? Colle l’adresse de sa fiche MusicBrainz (https://musicbrainz.org/artist/…) dans la case.</div>';
+    if ($('voirPlus')) $('voirPlus').onclick = () => { $('plusCands').hidden = false; $('voirPlus').hidden = true; };
+    $('cands').onclick = e => { const c = e.target.closest('.cand'); if (c) ouvrir(c.dataset.id); };             // un seul écouteur pour toute la liste
+    if (d.direct && d.groupes.length === 1) ouvrir(d.groupes[0].mbid);          // une fiche collée : on l'ouvre tout de suite
 }
 async function ouvrir(mbid, actualiser) {
     note(actualiser ? 'Mise à jour de la liste auprès de MusicBrainz (jusqu’à une minute)…' : 'Lecture de la fiche et de la liste des clips…');

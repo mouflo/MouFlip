@@ -79,6 +79,7 @@ def _roots():
 
 
 CACHE_DIR = BASE_DIR / "data" / "cache"
+VERSION_RECHERCHE = 2      # +1 quand la recherche de groupes s'améliore (les recherches enregistrées plus anciennes sont refaites)
 VERSION_LISTE = 4          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
 
 
@@ -272,7 +273,14 @@ def api_chercher():
     q = (request.args.get("q") or "").strip()
     if len(q) < 2:
         return jsonify({"groupes": []})
-    cle = noms.normaliser(q) or q.lower()
+    mbid = sources.mbid_dans(q)                                          # une adresse de fiche MusicBrainz (ou son identifiant) collée dans la recherche
+    if mbid:
+        try:
+            a = sources.artiste_par_mbid(mbid)
+        except sources.SourceIndisponible as e:
+            return jsonify({"error": f"MusicBrainz est injoignable : {e}. Réessaie dans un instant."}), 502
+        return jsonify({"groupes": [a] if a else [], "direct": True}) if a else jsonify({"groupes": [], "direct": True, "avertissement": "Aucune fiche MusicBrainz avec cet identifiant."})
+    cle = f"v{VERSION_RECHERCHE}:" + (noms.normaliser(q) or q.lower())    # la version change quand la recherche s'améliore : les anciens résultats enregistrés ne servent plus
     fichier = CACHE_DIR / "recherches.json"
     enregistrees = _lire_json(fichier) or {}
     ancien = enregistrees.get(cle)
