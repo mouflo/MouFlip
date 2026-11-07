@@ -388,6 +388,18 @@ function bandeImages(typeCss, bloc, cle) {
     t += `<button type="button" class="vign aucune${ch === '' ? ' sel' : ''}" data-cle="${cle}" data-url="">Aucune<span class="coche">✓</span></button>`;
     return `<div class="bande">${t}</div>`;
 }
+function blocEmby(f) {
+    const e = f.emby_artiste, nom = f.artiste;
+    if (!e) return '<div class="muted">Vérification indisponible.</div>';
+    const aide = '<div class="aide">Emby relie un clip à la page d’un artiste par son <b>nom</b>. Le nom écrit dans le .nfo doit être celui d’Emby, sinon le clip apparaît sous un autre artiste.</div>';
+    const compte = x => ` <span class="muted">(${x.titres_audio != null ? x.titres_audio + ' titre(s) audio' : '?'} · ${x.clips != null ? x.clips + ' clip(s)' : '?'})</span>`;
+    const choisir = (n, id) => `<button class="btn small ghost" data-artiste="${esc(n)}">Écrire « ${esc(n)} »${id ? '' : ''}</button> `;
+    if (e.etat === 'indisponible') return aide + `<div class="note warn">⚠️ ${esc(e.message || 'Emby injoignable.')}</div><div class="muted">Nom écrit dans les .nfo : <b>${esc(nom)}</b></div>`;
+    if (e.etat === 'identique') return aide + `<div class="note">✅ Artiste reconnu dans Emby : <b>« ${esc(e.exact.nom)} »</b>${compte(e.exact)}<br><span class="muted">Le clip apparaîtra sur sa page, avec ses albums audio.</span></div>`;
+    if (e.etat === 'autre_ecriture') return aide + `<div class="note warn">⚠️ Emby connaît cet artiste sous une autre écriture : <b>« ${esc(e.exact.nom)} »</b>${compte(e.exact)}<br>Nom actuellement écrit : « ${esc(nom)} ».</div><div style="margin-top:8px">${nom !== e.exact.nom ? choisir(e.exact.nom) : ''}${nom !== f.groupe.nom ? '<button class="btn small ghost" data-artiste="">↺ Nom d’origine</button>' : ''}</div>`;
+    if (e.etat === 'proche') return aide + `<div class="note warn">⚠️ Aucun artiste « ${esc(nom)} » dans Emby, mais des noms voisins existent :</div><div style="margin-top:8px">${e.proches.map(x => choisir(x.nom)).join('')}</div><div class="muted" style="margin-top:6px">Si aucun ne convient, l’artiste sera créé sous « ${esc(nom)} ».</div>`;
+    return aide + `<div class="note">ℹ️ Aucun artiste « ${esc(nom)} » dans Emby : il sera créé avec ce clip (et son <code>artist.nfo</code>).</div>`;
+}
 function rendreFiche() {
     const f = FI, c = f.clip, g = f.groupe;
     const fond = (g.fanart.choisis && g.fanart.choisis[0]) || (g.fanart.existants.find(x => x.present) ? urlExistant(g.fanart.existants.find(x => x.present).chemin) : '') || ((g.fanart.candidats[0] || {}).url) || '';
@@ -422,6 +434,7 @@ function rendreFiche() {
         <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera sur la vignette du clip dans Emby (« …-poster.jpg »).</div>
         <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>
       </section>
+      <section class="fi"><h3>🔗 Lien avec Emby</h3>${blocEmby(f)}</section>
       <section class="fi"><h3>🎤 Le groupe : ${esc(g.nom)}</h3>
         <dl class="fi-infos"><dt>Pays</dt><dd>${esc(g.pays || '—')}</dd><dt>Début</dt><dd>${esc(g.debut || '—')}</dd><dt>Genre</dt><dd>${esc(g.genre || '—')}</dd>
             <dt>Dossier</dt><dd>${esc(g.dossier)} ${g.dossier_existe ? '<span class="pill ok">existe</span>' : '<span class="pill">sera créé</span>'}</dd>
@@ -466,6 +479,7 @@ function rendreFiche() {
     });
     const bio = $('ficheBio'); if (bio) bio.onchange = () => choixFiche({biographie: bio.value === g.biographie_defaut ? null : bio.value}, true);
     $('ficheBioReset').onclick = () => choixFiche({biographie: null});
+    corps.querySelectorAll('[data-artiste]').forEach(b => b.onclick = () => choixFiche({artiste: b.dataset.artiste || null}));
 }
 async function choixFiche(corps, garderDefilement) {
     const y = $('fiche').scrollTop;

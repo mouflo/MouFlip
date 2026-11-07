@@ -1,0 +1,14 @@
+# Changelog
+
+## [0.1] - 2026-11-07
+Première version de MouFlip (clips vidéo K-pop pour Emby).
+- 🔎 **Recherche d'un groupe** (MusicBrainz) : fiche, albums, liste de ses clips officiels (sans remix, versions, chorégraphies, concerts ni coulisses). La liste trouvée est **enregistrée** sur le serveur et réutilisée ; « 🔄 Actualiser la liste » la redemande. Si MusicBrainz est en panne, la liste enregistrée sert quand même.
+- ✅ **Clips déjà présents** repérés dans « Video clip/<Groupe>/ » (noms écrits autrement, doubles espaces, `.nfo`), chemin de rangement prévu affiché. Rien n'est écrit tant que tu ne ranges pas.
+- 👁️ **Voir le clip** avant de choisir : lecteur YouTube intégré, vidéos possibles (chaînes officielles seulement quand il y en a), format et taille de chaque version, **toutes les qualités** d'une vidéo (1080p, 1440p, 4K × h264/vp9/av1) au choix.
+- ⬇️ **Téléchargement** à la meilleure qualité (ou celle choisie), image recopiée sans réencodage, dans un dossier de travail du serveur.
+- 🔊 **Volume sans perte** : ReplayGain 89 dB comme les thèmes de MouFlopening, réglé avec **AACGain** (paliers de 1,5 dB, le son AAC n'est pas réencodé) ; AAC refait en secours si le son n'est pas de l'AAC.
+- 🧾 **La fiche** : tout ce qui sera dans Emby (affiche, logo, bannière, fonds d'écran, pochette et cdart d'album, biographie modifiable, `.nfo`, liste des fichiers créés), avec **choix des images** quand plusieurs existent (fanart.tv, TheAudioDB, images prises dans la vidéo).
+- 🔗 **Artiste reconnu dans Emby** : Emby relie un clip à l'artiste par son nom ; la fiche vérifie l'écriture et propose celle d'Emby.
+- 📁 **Rangement sur confirmation**, clip par clip : copie vérifiée, `.nfo` au format de tes clips (`<musicvideo>`, `artist.nfo`), poster, images du groupe ; **jamais de remplacement** d'un fichier existant, sauf une image que tu choisis de remplacer (l'ancienne est sauvegardée). Emby est prévenu.
+- ⚙️ **Réglages** : Emby, dossier des clips, volume, clés fanart.tv / TheAudioDB / IMVDb, cookies YouTube (jamais renvoyés ni écrits dans le Journal). 🩺 Journal intégré. yt-dlp se met à jour tout seul chaque jour.
+- ⬇️ **Barre des téléchargements** toujours visible en bas de l'écran (dépliable), la page reste défilable.

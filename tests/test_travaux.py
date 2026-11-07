@@ -483,5 +483,61 @@ class FileDeTravauxTest(unittest.TestCase):
         self.assertIn("redémarrage", travaux.TRAVAUX[a["id"]]["message"])
 
 
+class ArtisteEmbyTest(unittest.TestCase):
+    @staticmethod
+    def _emby(artistes, comptes=None):
+        emby = mock.Mock(configured=True)
+        def requete(methode, chemin, **kw):
+            r = mock.Mock()
+            if chemin == "/Artists":
+                r.json.return_value = {"Items": [{"Name": n, "Id": str(i)} for i, n in enumerate(artistes, 1)]}
+            else:
+                r.json.return_value = {"TotalRecordCount": (comptes or {}).get(kw["params"]["IncludeItemTypes"], 0)}
+            return r
+        emby._request.side_effect = requete
+        return emby
+
+    def test_identique(self):
+        from src import emby_artistes
+        r = emby_artistes.chercher(self._emby(["aespa"], {"Audio": 12, "MusicVideo": 3}), "aespa")
+        self.assertEqual((r["etat"], r["exact"]["nom"], r["exact"]["titres_audio"], r["exact"]["clips"]), ("identique", "aespa", 12, 3))
+
+    def test_meme_nom_ecrit_autrement(self):
+        from src import emby_artistes
+        r = emby_artistes.chercher(self._emby(["Aespa"]), "aespa")
+        self.assertEqual((r["etat"], r["exact"]["nom"]), ("autre_ecriture", "Aespa"))
+
+    def test_noms_voisins_et_absent(self):
+        from src import emby_artistes
+        r = emby_artistes.chercher(self._emby(["(G)I-DLE (여자)아이들", "Autre"]), "(G)I-DLE")
+        self.assertEqual(r["etat"], "proche")
+        self.assertEqual([x["nom"] for x in r["proches"]], ["(G)I-DLE (여자)아이들"])
+        self.assertEqual(emby_artistes.chercher(self._emby(["Truc"]), "aespa")["etat"], "absent")
+
+    def test_cle_absente_ou_emby_en_panne(self):
+        from src import emby_artistes
+        self.assertEqual(emby_artistes.chercher(mock.Mock(configured=False), "aespa")["etat"], "indisponible")
+        emby = mock.Mock(configured=True)
+        emby._request.side_effect = RuntimeError("Emby injoignable")
+        r = emby_artistes.chercher(emby, "aespa")
+        self.assertEqual(r["etat"], "indisponible")
+        self.assertIn("injoignable", r["message"])
+
+    def test_nom_choisi_dans_la_fiche_ecrit_dans_les_nfo(self):
+        t = FicheTest("test_la_fiche_montre_tout")
+        t.setUp()
+        try:
+            f, err = travaux.enregistrer_choix(t.tid, {"artiste": "Aespa"})
+            self.assertEqual(err, "")
+            self.assertEqual(f["artiste"], "Aespa")
+            c = travaux.TRAVAUX[t.tid]
+            self.assertIn("<artist>Aespa</artist>", travaux._nfo_clip(c))
+            self.assertIn("<name>Aespa</name>", travaux._nfo_artiste(c))
+            self.assertEqual(travaux.enregistrer_choix(t.tid, {"artiste": None})[0]["artiste"], "aespa")           # retour au nom d'origine
+            self.assertIsNone(travaux.enregistrer_choix(t.tid, {"artiste": "x\ny"})[0])
+        finally:
+            t.tearDown()
+
+
 if __name__ == "__main__":
     unittest.main()

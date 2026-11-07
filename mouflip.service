@@ -1,0 +1,16 @@
+[Unit]
+Description=MouFlip - Clips vidéo K-pop pour Emby (interface web)
+After=network.target remote-fs.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mouflip
+ExecStart=/opt/mouflip/venv/bin/python app.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/mouflip.log
+StandardError=append:/var/log/mouflip.log
+
+[Install]
+WantedBy=multi-user.target

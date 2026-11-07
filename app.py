@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import audio, existants, formats, noms, sources, travaux, ytcookies
+from src import audio, emby_artistes, existants, formats, noms, sources, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -297,6 +297,14 @@ def api_existant():
     if not ok:
         return jsonify({"error": "Image introuvable."}), 404
     return send_file(chemin, max_age=60)
+
+
+@app.route("/api/emby/artiste")
+def api_emby_artiste():
+    nom = (request.args.get("nom") or "").strip()
+    if not nom:
+        return jsonify({"error": "Nom manquant."}), 400
+    return jsonify(emby_artistes.chercher(EMBY, nom))
 
 
 @app.route("/api/travaux/<tid>/ranger", methods=["POST"])
@@ -633,6 +641,7 @@ import redemarrage
 redemarrage.init_app(app, BASE_DIR)
 import redemarrer
 redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe())
+travaux.emby_artiste_fn = lambda nom: emby_artistes.chercher(EMBY, nom)
 travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"])
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")
 

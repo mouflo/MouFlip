@@ -82,7 +82,8 @@ def _choix_par_defaut(ctx) -> dict:
     """Les choix d'images : ceux déjà faits pour ce groupe (réutilisés pour ses autres clips), sinon « le premier de chaque type » (None)."""
     memo = _choix_groupe(ctx.get("mbid", ""))
     return {"images": {**{t: None for t in TYPES_IMAGES}, "fanart": None, **(memo.get("images") or {})},
-            "album": {"couverture": None, "cdart": None, **(memo.get("album") or {})}, "biographie": None, "poster": None}
+            "album": {"couverture": None, "cdart": None, **(memo.get("album") or {})}, "biographie": None, "poster": None,
+            "artiste": memo.get("artiste")}
 
 
 def ajouter(groupe: dict, clip: dict) -> dict:
@@ -185,12 +186,17 @@ def _nfo_artiste(c) -> str:
     _racine, groupe, _a = _dossiers(c)
     bio = (c.get("choix") or {}).get("biographie")
     images = _images_effectives(c)[0]
-    return nfo.nfo_artiste(c["groupe"], fiche.get("mbid", ""), (ctx.get("genre") or "K-Pop"), fiche.get("pays", ""), fiche.get("debut", ""),
+    return nfo.nfo_artiste(nom_artiste(c), fiche.get("mbid", ""), (ctx.get("genre") or "K-Pop"), fiche.get("pays", ""), fiche.get("debut", ""),
                            ctx.get("biographie", "") if bio is None else bio, images.get("vignette") or (ctx.get("images") or {}).get("vignette", ""), str(groupe))
 
 
+def nom_artiste(c) -> str:
+    """Le nom écrit dans les .nfo : celui choisi dans la fiche (écriture d'Emby), sinon celui de MusicBrainz."""
+    return ((c.get("choix") or {}).get("artiste") or c["groupe"]).strip()
+
+
 def _nfo_clip(c) -> str:
-    return nfo.nfo_clip(c["titre"], c["annee"], c["groupe"], c["album"], c.get("sonde") or {}, c.get("mbid_clip", ""), c.get("video_id", ""))
+    return nfo.nfo_clip(c["titre"], c["annee"], nom_artiste(c), c["album"], c.get("sonde") or {}, c.get("mbid_clip", ""), c.get("video_id", ""))
 
 
 def construire_plan(c) -> list[dict]:
@@ -304,6 +310,9 @@ def _existant(chemin: Path) -> dict:
     return {"present": chemin.exists(), "chemin": str(chemin)} if chemin.exists() else {"present": False}
 
 
+emby_artiste_fn = None          # app.py y branche la recherche d'artiste dans Emby (nom -> état)
+
+
 def fiche(tid) -> dict | None:
     with _VERROU:
         c = TRAVAUX.get(tid)
@@ -350,6 +359,7 @@ def fiche(tid) -> dict | None:
                        "candidats": cands.get("fanart") or [], "choisis": choix.get("images", {}).get("fanart"), "existants": fonds_existants,
                        "libres": sum(1 for f in fonds_existants if not f["present"])}},
         "album": albums,
+        "emby_artiste": emby_artiste_fn(nom_artiste(c)) if emby_artiste_fn else None, "artiste": nom_artiste(c),
         "plan": [{k: v for k, v in l.items() if k not in ("contenu",)} for l in plan],
     }
 
@@ -395,6 +405,11 @@ def enregistrer_choix(tid, donnees: dict):
         if bio is not None and (not isinstance(bio, str) or len(bio) > 20000):
             return None, "Texte de biographie trop long (20 000 caractères au plus)."
         choix["biographie"] = bio
+    if "artiste" in donnees:
+        nom = donnees["artiste"]
+        if nom is not None and (not isinstance(nom, str) or not nom.strip() or len(nom) > 120 or "\n" in nom):
+            return None, "Nom d'artiste invalide."
+        choix["artiste"] = nom.strip() if nom else None
     if "poster" in donnees:
         if donnees["poster"] is not None and donnees["poster"] not in {p["id"] for p in c.get("posters") or []}:
             return None, "Poster inconnu."
@@ -405,7 +420,7 @@ def enregistrer_choix(tid, donnees: dict):
         memo = json.loads(_fichier_choix().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
-    memo[c["contexte"].get("mbid", "")] = {"images": choix["images"], "album": choix["album"]}        # réutilisés pour les autres clips du groupe
+    memo[c["contexte"].get("mbid", "")] = {"images": choix["images"], "album": choix["album"], "artiste": choix.get("artiste")}        # réutilisés pour les autres clips du groupe
     tmp = _fichier_choix().with_suffix(".tmp")
     tmp.write_text(json.dumps(memo, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, _fichier_choix())
