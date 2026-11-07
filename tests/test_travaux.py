@@ -519,9 +519,30 @@ class FileDeTravauxTest(unittest.TestCase):
         self.assertEqual(a["id"], b["id"])
         travaux.TRAVAUX[a["id"]]["etat"] = "telechargement"
         travaux._sauver()
-        travaux._charger()
-        self.assertEqual(travaux.TRAVAUX[a["id"]]["etat"], "erreur")           # interrompu : signalé, pas perdu en silence
-        self.assertIn("redémarrage", travaux.TRAVAUX[a["id"]]["message"])
+        travaux._charger()                                                       # simple lecture (import de l'appli, tests…) : rien n'est modifié
+        self.assertEqual(travaux.TRAVAUX[a["id"]]["etat"], "telechargement")
+        travaux._charger(reprise=True)                                           # vrai démarrage du service : le clip REPREND tout seul
+        self.assertEqual(travaux.TRAVAUX[a["id"]]["etat"], "attente")
+        self.assertIn("Reprise", travaux.TRAVAUX[a["id"]]["message"])
+        for _ in range(2):                                                       # …mais pas en boucle si l'appli retombe à chaque fois
+            travaux.TRAVAUX[a["id"]]["etat"] = "reduction"
+            travaux._sauver()
+            travaux._charger(reprise=True)
+        self.assertEqual(travaux.TRAVAUX[a["id"]]["etat"], "erreur")
+        self.assertIn("plusieurs fois", travaux.TRAVAUX[a["id"]]["message"])
+
+    def test_lire_l_etat_sans_ecriture_ne_touche_pas_au_fichier_du_service(self):
+        """Bug vu : importer l'appli (les tests) réécrivait le vrai fichier d'état et marquait comme interrompus les clips que le service traitait encore."""
+        fichier = self.tmp / "data" / "travail" / "etat.json"
+        c = travaux.ajouter(self.ctx, {"titre": "En cours", "album": "A", "video_id": "abcdefghijk"})
+        travaux.TRAVAUX[c["id"]]["etat"] = "reduction"
+        travaux._sauver()
+        avant = fichier.read_text(encoding="utf-8")
+        travaux.configurer(self.tmp / "data", lambda: str(self.racine), lambda: 89.0, lambda: "192k", self.emby, ecriture=False)     # ce que fait « import app »
+        self.assertEqual(fichier.read_text(encoding="utf-8"), avant)             # fichier intact
+        self.assertEqual(travaux.TRAVAUX[c["id"]]["etat"], "reduction")
+        travaux._maj(travaux.TRAVAUX[c["id"]], progres=50)                       # même une mise à jour ne l'écrit pas tant que demarrer() n'a pas eu lieu
+        self.assertEqual(fichier.read_text(encoding="utf-8"), avant)
 
 
 class ArtisteEmbyTest(unittest.TestCase):

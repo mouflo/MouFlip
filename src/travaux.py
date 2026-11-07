@@ -20,16 +20,18 @@ logger = logging.getLogger(__name__)
 _VERROU = threading.RLock()
 TRAVAUX: dict[str, dict] = {}
 _FILE: "queue.Queue[str]" = queue.Queue()
-_CFG = {"dossier": None, "cible_db": audio.REFERENCE_DB, "debit": "192k", "racine": None, "emby": None}
+_CFG = {"dossier": None, "cible_db": audio.REFERENCE_DB, "debit": "192k", "racine": None, "emby": None, "ecriture": True}
 ETATS_ACTIFS = ("attente", "telechargement", "reduction", "audio")
 SLOTS_FANART = ("fanart", "fanart2", "fanart3", "fanart4")          # fanart.jpg puis extrafanart/fanart1..3.jpg (voir rangement.IMAGES_GROUPE)
 TYPES_IMAGES = ("vignette", "banniere", "logo")
 NOMS_FICHIERS = dict(rangement.IMAGES_GROUPE)
 
 
-def configurer(dossier_donnees, racine_fn, cible_fn, debit_fn, emby, sans_perte_fn=lambda: True, reduction_fn=lambda: {"actif": False, "crf": 30}):
+def configurer(dossier_donnees, racine_fn, cible_fn, debit_fn, emby, sans_perte_fn=lambda: True, reduction_fn=lambda: {"actif": False, "crf": 30}, ecriture=True):
     """racine_fn() = dossier « Video clip » ; cible_fn() = niveau en dB ; debit_fn() = débit AAC ; emby = client Emby."""
-    _CFG.update(dossier=Path(dossier_donnees) / "travail", racine=racine_fn, cible=cible_fn, debit=debit_fn, emby=emby, sans_perte=sans_perte_fn, reduction=reduction_fn)
+    # ecriture=False : l'état est seulement LU (c'est le cas quand l'appli est simplement importée, par exemple par les tests) ; le vrai service ne l'écrit
+    # qu'après demarrer(). Avant, un simple import réécrivait le fichier d'état du service en marquant ses clips en cours comme « interrompus ».
+    _CFG.update(ecriture=ecriture, dossier=Path(dossier_donnees) / "travail", racine=racine_fn, cible=cible_fn, debit=debit_fn, emby=emby, sans_perte=sans_perte_fn, reduction=reduction_fn)
     _CFG["dossier"].mkdir(parents=True, exist_ok=True)
     _charger()
 
@@ -39,21 +41,34 @@ def _fichier_etat() -> Path:
 
 
 def _sauver():
+    if not _CFG.get("ecriture", True):
+        return
     tmp = _fichier_etat().with_suffix(".tmp")
     tmp.write_text(json.dumps(TRAVAUX, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, _fichier_etat())
 
 
-def _charger():
+MAX_REPRISES = 2
+
+
+def _charger(reprise: bool = False):
+    """Lit l'état. reprise=True (au démarrage du vrai service seulement) : un clip qui travaillait quand l'appli s'est arrêtée REPREND tout seul
+    (jusqu'à 2 fois, puis il est signalé en erreur : un clip qui fait tomber l'appli ne tourne pas en boucle)."""
     with _VERROU:
         TRAVAUX.clear()
         try:
             TRAVAUX.update(json.loads(_fichier_etat().read_text(encoding="utf-8")))
         except (OSError, ValueError):
             pass
+        if not reprise:
+            return
         for c in TRAVAUX.values():
             if c["etat"] in ETATS_ACTIFS:                            # l'appli s'est arrêtée pendant ce clip
-                c["etat"], c["message"] = "erreur", "Interrompu par un redémarrage : relance-le."
+                c["essais"] = c.get("essais", 0) + 1
+                if c["essais"] <= MAX_REPRISES:
+                    c.update(etat="attente", progres=0, message="Reprise après un redémarrage de l'appli…")
+                else:
+                    c.update(etat="erreur", message="Interrompu plusieurs fois par un redémarrage : relance-le.")
         _sauver()
 
 
@@ -294,6 +309,13 @@ def _boucle():
 
 
 def demarrer():
+    """À appeler une seule fois, par le vrai service : les clips interrompus par un redémarrage reprennent, puis la file de travail démarre."""
+    _CFG["ecriture"] = True
+    _charger(reprise=True)
+    with _VERROU:
+        for tid, c in sorted(TRAVAUX.items(), key=lambda x: x[1]["cree"]):
+            if c["etat"] == "attente":
+                _FILE.put(tid)
     threading.Thread(target=_boucle, daemon=True, name="travaux").start()
 
 
