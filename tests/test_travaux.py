@@ -353,6 +353,47 @@ class FicheTest(unittest.TestCase):
         self.assertEqual(travaux.TRAVAUX[c2["id"]]["choix"]["images"]["logo"], "http://i/l2.png")
         self.assertIsNone(travaux.TRAVAUX[c2["id"]]["choix"]["biographie"])        # la biographie et le poster se choisissent clip par clip
 
+    def test_clip_lance_sans_identifiant_d_album_retrouve_sa_pochette(self):
+        """Bug vu : la page ne transmettait pas l'identifiant de l'album, donc aucune pochette n'était proposée."""
+        c = travaux.TRAVAUX[self.tid]
+        c["rg"] = ""
+        travaux.rg_fn = lambda ctx, titre, album: "rg1" if titre == "LEMONADE" else ""
+        try:
+            f = travaux.fiche(self.tid)
+        finally:
+            travaux.rg_fn = None
+        self.assertEqual(c["rg"], "rg1")                                         # retrouvé et gardé
+        self.assertEqual([x["url"] for x in f["album"]["couverture"]["candidats"]], ["http://i/c1.jpg", "http://i/c2.jpg"])
+        self.assertEqual({l.get("cle"): l for l in f["plan"]}["album_couverture"]["url"], "http://i/c1.jpg")
+
+    def test_les_choix_d_album_ne_sont_pas_retenus_pour_tout_le_groupe(self):
+        travaux.enregistrer_choix(self.tid, {"album": {"couverture": ""}})        # « Aucune pochette » pour CET album
+        c2 = travaux.ajouter(self.ctx, {"titre": "Supernova", "album": "Armageddon", "video_id": "abcdefghijk"})
+        self.assertEqual(travaux.TRAVAUX[c2["id"]]["choix"]["album"], {"couverture": None, "cdart": None})   # un autre album repart des propositions
+
+    def test_ancien_choix_aucune_pochette_oublie_quand_l_album_est_retrouve(self):
+        c = travaux.TRAVAUX[self.tid]
+        c["rg"] = ""
+        c["choix"]["album"] = {"couverture": "", "cdart": None}                  # choix fait quand aucune pochette n'était proposée
+        travaux.rg_fn = lambda ctx, titre, album: "rg1"
+        try:
+            f = travaux.fiche(self.tid)
+        finally:
+            travaux.rg_fn = None
+        self.assertIsNone(f["album"]["couverture"]["choisi"])
+        self.assertEqual({l.get("cle"): l for l in f["plan"]}["album_couverture"]["url"], "http://i/c1.jpg")
+
+    def test_album_sans_pochette_sous_le_single_prend_celle_de_l_album(self):
+        c = travaux.TRAVAUX[self.tid]
+        c["rg"] = "rg_single"                                                    # le single n'a pas d'image chez fanart.tv, l'album du même nom oui
+        travaux.rg_fn = lambda ctx, titre, album: "rg1"
+        try:
+            f = travaux.fiche(self.tid)
+        finally:
+            travaux.rg_fn = None
+        self.assertEqual(c["rg"], "rg1")
+        self.assertEqual(len(f["album"]["couverture"]["candidats"]), 2)
+
     def test_fiche_d_un_clip_pas_pret(self):
         c = travaux.ajouter(self.ctx, {"titre": "Autre", "album": "Autre", "video_id": "abcdefghijk"})
         self.assertIsNone(travaux.fiche(c["id"]))

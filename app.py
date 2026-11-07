@@ -231,6 +231,22 @@ def _contexte_groupe(mbid: str) -> dict:
             "candidats": g.get("candidats", {}), "genre": (g["fiche"].get("genres") or ["K-Pop"])[0].title() if (g["fiche"].get("genres") or []) else "K-Pop"}
 
 
+def _resoudre_rg(ctx: dict, titre: str, album: str) -> str:
+    """Quel groupe de sorties (album) de MusicBrainz pour ce clip ? Celui du même titre dans la liste enregistrée, puis celui d'un autre clip du même
+    album ; on préfère un groupe qui a des images chez fanart.tv (la pochette d'un album n'est pas toujours rangée sous le single)."""
+    try:
+        clips = _groupe_complet(ctx["mbid"])["clips"]
+    except Exception:
+        return ""
+    images = ctx.get("images_album") or {}
+    memes = [c["rg"] for c in clips if c.get("rg") and c["titre"] == titre]
+    memes += [c["rg"] for c in clips if c.get("rg") and noms.normaliser(c["album"]) == noms.normaliser(album) and c["rg"] not in memes]
+    return next((rg for rg in memes if images.get(rg)), memes[0] if memes else "")
+
+
+travaux.rg_fn = _resoudre_rg
+
+
 @app.route("/api/travaux", methods=["GET", "POST"])
 def api_travaux():
     if request.method == "GET":
@@ -258,7 +274,7 @@ def api_travaux():
         else:
             fid, texte = "", ""
         ajoutes.append(travaux.ajouter(ctx, {"titre": titre, "album": str(c.get("album") or titre), "annee": str(c.get("annee") or ""),
-                                              "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or ""), "video_id": video_id,
+                                              "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or "") or _resoudre_rg(ctx, titre, str(c.get("album") or titre)), "video_id": video_id,
                                               "format_id": fid, "qualite": texte}))
     return jsonify({"travaux": ajoutes})
 

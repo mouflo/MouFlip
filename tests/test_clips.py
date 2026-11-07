@@ -335,6 +335,17 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(self.c.post("/api/choix_qualite", json={"mbid": self.MB, "titre": "X", "video_id": "bad", "format_id": "271"}).status_code, 400)
         self.assertEqual(self.c.post("/api/choix_qualite", json={"mbid": self.MB, "titre": "X", "video_id": "gQlMMD8auMs", "format_id": "1; rm"}).status_code, 400)
 
+    def test_resolution_de_l_album_d_un_clip(self):
+        """Le groupe de sorties est retrouvé d'après la liste enregistrée : même titre, puis même album ; celui qui a une image fanart.tv de préférence."""
+        clips = [{"titre": "LEMONADE", "album": "LEMONADE", "rg": "rg_single", "mbid": "1", "annee": "2026"},
+                 {"titre": "WDA", "album": "LEMONADE", "rg": "rg_album", "mbid": "2", "annee": "2026"}]
+        p1, p2, p3, p4 = self._faux_mb(clips)
+        with p1, p2, p3, p4:
+            ctx = {"mbid": self.MB, "images_album": {"rg_album": {"couverture": "http://i/c.jpg"}}}
+            self.assertEqual(self.A._resoudre_rg(ctx, "LEMONADE", "LEMONADE"), "rg_album")      # le single n'a pas d'image, l'album du même nom oui
+            self.assertEqual(self.A._resoudre_rg({"mbid": self.MB, "images_album": {}}, "LEMONADE", "LEMONADE"), "rg_single")
+            self.assertEqual(self.A._resoudre_rg(ctx, "Inconnu", "Autre album"), "")
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)

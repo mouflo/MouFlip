@@ -357,7 +357,7 @@ async function lireFormats() {
 async function telechargerCoches() {
     const els = [...document.querySelectorAll('.clip')].filter(el => el.querySelector('input').checked);
     if (!els.length) return note('Coche au moins un clip.', 'warn');
-    const clips = els.map(el => { const c = G.clips.find(x => x.titre === el.dataset.t); return {titre: c.titre, album: c.album, annee: c.annee, mbid: c.mbid, video_id: V[c.titre] || ''}; });
+    const clips = els.map(el => { const c = G.clips.find(x => x.titre === el.dataset.t); return {titre: c.titre, album: c.album, annee: c.annee, mbid: c.mbid, rg: c.rg || '', video_id: V[c.titre] || ''}; });
     if (!await MouConfirm(`Télécharger ${clips.length} clip(s) de ${G.fiche.nom} ?\n\nIls sont préparés sur le serveur (meilleure qualité, volume réglé). Rien n'est rangé dans « Video clip » avant ton accord, clip par clip.`, {ok: 'Télécharger', annuler: 'Annuler'})) return;
     note('Lancement…');
     const d = await post('/api/travaux', {mbid: G.fiche.mbid, clips});

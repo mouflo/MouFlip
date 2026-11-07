@@ -82,7 +82,7 @@ def _choix_par_defaut(ctx) -> dict:
     """Les choix d'images : ceux déjà faits pour ce groupe (réutilisés pour ses autres clips), sinon « le premier de chaque type » (None)."""
     memo = _choix_groupe(ctx.get("mbid", ""))
     return {"images": {**{t: None for t in TYPES_IMAGES}, "fanart": None, **(memo.get("images") or {})},
-            "album": {"couverture": None, "cdart": None, **(memo.get("album") or {})}, "biographie": None, "poster": None,
+            "album": {"couverture": None, "cdart": None}, "biographie": None, "poster": None,
             "artiste": memo.get("artiste")}
 
 
@@ -139,6 +139,23 @@ def _chemin_poster(c) -> str:
     return posters[0]["fichier"] if posters else (c.get("poster") or "")
 
 
+def _rg(c) -> str:
+    """Le groupe de sorties (album) du clip, celui qui a des images chez fanart.tv de préférence. Un clip lancé sans identifiant d'album, ou dont l'album
+    n'a pas de pochette, est retrouvé d'après la liste enregistrée du groupe (même titre, puis même album) : l'appli répare seule."""
+    ctx = c["contexte"]
+    images = ctx.get("images_album") or {}
+    if rg_fn and (not c.get("rg") or not images.get(c["rg"])):
+        try:
+            r = rg_fn(ctx, c["titre"], c["album"])
+        except Exception:
+            r = ""
+        if r and r != c.get("rg"):
+            c["rg"] = r
+            if c.get("choix"):
+                c["choix"]["album"] = {"couverture": None, "cdart": None}          # les choix faits avant visaient un autre album (ou aucun) : on repart des propositions
+    return c.get("rg") or ""
+
+
 def _dossiers(c):
     ctx = c["contexte"]
     racine = Path(_CFG["racine"]())
@@ -168,7 +185,7 @@ def _images_effectives(c):
     libres = [cle for cle in SLOTS_FANART if not (groupe / NOMS_FICHIERS[cle]).exists()]            # les fonds déjà là ne sont jamais remplacés
     for cle, u in zip(libres, urls):
         images[cle] = u
-    album = (ctx.get("images_album") or {}).get(c.get("rg") or "") or {}
+    album = (ctx.get("images_album") or {}).get(_rg(c)) or {}
     images_album = {}
     for cle, fichier, nom_remp in (("couverture", "folder.jpg", "album_couverture"), ("cdart", "cdart.png", "album_cdart")):
         voulu = (choix.get("album") or {}).get(cle)
@@ -311,6 +328,7 @@ def _existant(chemin: Path) -> dict:
 
 
 emby_artiste_fn = None          # app.py y branche la recherche d'artiste dans Emby (nom -> état)
+rg_fn = None                    # app.py y branche « quel groupe de sorties (album) pour ce clip ? » (contexte, titre, album -> id)
 
 
 def fiche(tid) -> dict | None:
@@ -323,7 +341,7 @@ def fiche(tid) -> dict | None:
     cands = ctx.get("candidats") or {}
     images, images_album, remplacer = _images_effectives(c)
     plan = construire_plan(c)
-    album = (ctx.get("images_album") or {}).get(c.get("rg") or "") or {}
+    album = (ctx.get("images_album") or {}).get(_rg(c)) or {}
 
     def bloc(type_, nom_fichier, dossier, candidats, choisi, actuelle_remplacee):
         return {"type": type_, "fichier": nom_fichier, "existant": _existant(Path(dossier) / nom_fichier), "candidats": candidats, "choisi": choisi,
@@ -420,7 +438,7 @@ def enregistrer_choix(tid, donnees: dict):
         memo = json.loads(_fichier_choix().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
-    memo[c["contexte"].get("mbid", "")] = {"images": choix["images"], "album": choix["album"], "artiste": choix.get("artiste")}        # réutilisés pour les autres clips du groupe
+    memo[c["contexte"].get("mbid", "")] = {"images": choix["images"], "artiste": choix.get("artiste")}      # pas l'album : sa pochette est propre à chaque album        # réutilisés pour les autres clips du groupe
     tmp = _fichier_choix().with_suffix(".tmp")
     tmp.write_text(json.dumps(memo, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, _fichier_choix())
