@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import audio, emby_artistes, existants, formats, noms, sources, telechargement, travaux, ytcookies
+from src import audio, chaines, emby_artistes, existants, formats, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -79,7 +79,7 @@ def _roots():
 
 
 CACHE_DIR = BASE_DIR / "data" / "cache"
-VERSION_LISTE = 2          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
+VERSION_LISTE = 3          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
 
 
 def _ecrire_json(chemin: Path, data):
@@ -98,11 +98,41 @@ def _lire_json(chemin: Path):
         return None
 
 
+def _fichier_chaines(mbid: str) -> Path:
+    return CACHE_DIR / "chaines" / f"{mbid}.json"
+
+
+def _chaines_officielles(mbid: str) -> list[dict]:
+    """Les chaînes YouTube officielles du groupe : celles de MusicBrainz + celles ajoutées par l'utilisatrice. [{id, nom, url, source}]."""
+    base = _lire_json(CACHE_DIR / "groupes" / f"{mbid}.json") or {}
+    toutes = [{**x, "source": "MusicBrainz"} for x in base.get("chaines_mb", [])] + [{**x, "source": "toi"} for x in (_lire_json(_fichier_chaines(mbid)) or [])]
+    vues, sortie = set(), []
+    for x in toutes:
+        if x.get("id") and x["id"] not in vues:
+            vues.add(x["id"])
+            sortie.append(x)
+    return sortie
+
+
+def _ids_chaines(mbid: str) -> set:
+    return {x["id"] for x in _chaines_officielles(mbid)}
+
+
 def _construire_base(mbid: str) -> dict:
     """Interroge MusicBrainz, TheAudioDB, fanart.tv et Wikipédia (le plus long : jusqu'à une minute). Lève SourceIndisponible si MusicBrainz ne répond pas."""
     erreurs = []
     fiche = sources.fiche_mb(mbid)
-    clips = sources.clips_mb(mbid, fiche.get("nom", ""), decouverte=lambda pistes: formats.decouvrir(fiche.get("nom", ""), pistes))
+    chaines_mb = []
+    for u in fiche.get("youtube", [])[:4]:                           # chaîne(s) officielle(s) que MusicBrainz connaît
+        try:
+            ch = chaines.resoudre(u)
+            chaines_mb.append({"id": ch["id"], "nom": ch["nom"], "url": ch["url"]})
+        except chaines.ChaineError:
+            cid = chaines.id_depuis_url(u)
+            if cid:
+                chaines_mb.append({"id": cid, "nom": "", "url": u})
+    ids = {x["id"] for x in chaines_mb} | {x["id"] for x in (_lire_json(_fichier_chaines(mbid)) or [])}
+    clips = sources.clips_mb(mbid, fiche.get("nom", ""), decouverte=lambda pistes: formats.decouvrir(fiche.get("nom", ""), pistes, chaines=ids))
     try:
         rgs = [{"id": g["id"], "titre": g["titre"], "type": g["type"], "date": g["date"]} for g in sources._sorties(mbid)]
     except sources.SourceIndisponible:
@@ -122,7 +152,7 @@ def _construire_base(mbid: str) -> dict:
             wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
         except sources.SourceIndisponible as e:
             erreurs.append(str(e))
-    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "rgs": rgs, "enregistre": time.time(), "v": VERSION_LISTE}
+    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "rgs": rgs, "chaines_mb": chaines_mb, "enregistre": time.time(), "v": VERSION_LISTE}
 
 
 def _fichier_ajouts(mbid: str) -> Path:
@@ -170,7 +200,7 @@ def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
     return {"fiche": fiche, "dossier_groupe": str(dossier) if dossier else "", "dossier_nouveau": not dossier, "nb_locaux": len(locaux),
             "biographie": base["audiodb"].get("biographie") or base["wikipedia"], "biographie_langue": base["audiodb"].get("biographie_langue") or ("fr" if base["wikipedia"] else ""),
             "images": {**base["audiodb"].get("images", {}), **base["fanart"]["images"]}, "images_album": base["fanart"]["albums"], "candidats": sources.candidats_images(base["audiodb"], base["fanart"]),
-            "genre_audiodb": base["audiodb"].get("genre", ""), "fanart_cle": base["fanart"]["cle"], "clips": clips, "erreurs": base["erreurs"] + ([avertissement] if avertissement else []), "racine": DOSSIER_CLIPS,
+            "genre_audiodb": base["audiodb"].get("genre", ""), "fanart_cle": base["fanart"]["cle"], "chaines": _chaines_officielles(mbid), "clips": clips, "erreurs": base["erreurs"] + ([avertissement] if avertissement else []), "racine": DOSSIER_CLIPS,
             "racine_ok": Path(DOSSIER_CLIPS).is_dir(), "enregistre": base.get("enregistre", 0), "depuis_cache": not actualiser and not avertissement and bool(base.get("enregistre"))}
 
 
@@ -271,6 +301,7 @@ def _resoudre_rg(ctx: dict, titre: str, album: str) -> str:
 
 
 travaux.rg_fn = _resoudre_rg
+travaux.chaines_fn = lambda ctx: _ids_chaines(ctx.get("mbid", ""))
 
 
 @app.route("/api/travaux", methods=["GET", "POST"])
@@ -378,6 +409,57 @@ def api_ajout_retirer():
     ajouts = [a for a in (_lire_json(_fichier_ajouts(mbid)) or []) if a["titre"] != titre]
     _ecrire_json(_fichier_ajouts(mbid), ajouts)
     return jsonify({"ok": True})
+
+
+def _ecrire_chaines_toi(mbid: str, liste: list):
+    _ecrire_json(_fichier_chaines(mbid), liste)
+    _APERCUS.clear()                                                     # les vidéos « officielles » se jugent d'après ces chaînes : on les reclasse
+
+
+@app.route("/api/chaines/<mbid>")
+def api_chaines(mbid):
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        return jsonify({"error": "Groupe invalide."}), 400
+    return jsonify({"chaines": _chaines_officielles(mbid)})
+
+
+@app.route("/api/chaines/ajouter", methods=["POST"])
+def api_chaines_ajouter():
+    """Ajoute une chaîne YouTube officielle (la chaîne du groupe, celle de son label) d'après son adresse collée."""
+    b = request.get_json(silent=True) or {}
+    mbid = str(b.get("mbid", ""))
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        return jsonify({"ok": False, "error": "Groupe invalide."}), 400
+    try:
+        ch = chaines.resoudre(str(b.get("lien", "")))
+    except chaines.ChaineError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    liste = [x for x in (_lire_json(_fichier_chaines(mbid)) or []) if x["id"] != ch["id"]] + [{"id": ch["id"], "nom": ch["nom"], "url": ch["url"]}]
+    _ecrire_chaines_toi(mbid, liste)
+    return jsonify({"ok": True, "chaine": ch, "chaines": _chaines_officielles(mbid)})
+
+
+@app.route("/api/chaines/officielle", methods=["POST"])
+def api_chaines_officielle():
+    """« Cette chaîne est officielle pour ce groupe » (bouton du lecteur) : sans avoir à retrouver son adresse."""
+    b = request.get_json(silent=True) or {}
+    mbid, cid, nom = str(b.get("mbid", "")), str(b.get("channel_id", "")), str(b.get("nom", ""))[:120]
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not chaines.ID_VALIDE.fullmatch(cid):
+        return jsonify({"ok": False, "error": "Chaîne invalide."}), 400
+    liste = [x for x in (_lire_json(_fichier_chaines(mbid)) or []) if x["id"] != cid] + [{"id": cid, "nom": nom, "url": f"https://www.youtube.com/channel/{cid}"}]
+    _ecrire_chaines_toi(mbid, liste)
+    return jsonify({"ok": True, "chaines": _chaines_officielles(mbid)})
+
+
+@app.route("/api/chaines/retirer", methods=["POST"])
+def api_chaines_retirer():
+    """Retire une chaîne AJOUTÉE par l'utilisatrice (celles de MusicBrainz restent)."""
+    b = request.get_json(silent=True) or {}
+    mbid, cid = str(b.get("mbid", "")), str(b.get("id", ""))
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        return jsonify({"ok": False, "error": "Groupe invalide."}), 400
+    _ecrire_chaines_toi(mbid, [x for x in (_lire_json(_fichier_chaines(mbid)) or []) if x["id"] != cid])
+    return jsonify({"ok": True, "chaines": _chaines_officielles(mbid)})
 
 
 @app.route("/api/travaux/<tid>/fiche", methods=["GET"])
@@ -653,12 +735,14 @@ def api_apercu():
     groupe, titre = str(b.get("groupe", "")).strip(), str(b.get("titre", "")).strip()
     if not groupe or not titre:
         return jsonify({"error": "Clip inconnu."}), 400
-    cle = (groupe, titre)
+    mbid = str(b.get("mbid", ""))
+    ids = _ids_chaines(mbid) if re.fullmatch(r"[0-9a-f-]{36}", mbid) else set()
+    cle = (groupe, titre, frozenset(ids))
     ancien = _APERCUS.get(cle)
     if ancien and time.time() - ancien[0] < 1800:
         return jsonify({"candidats": ancien[1]})
     try:
-        c = formats.candidats(groupe, titre)
+        c = formats.candidats(groupe, titre, chaines=ids)
     except Exception as e:
         logger.warning("Aperçu impossible pour « %s - %s » : %s", groupe, titre, e)
         return jsonify({"error": f"YouTube ne répond pas : {str(e)[:160]}"}), 502

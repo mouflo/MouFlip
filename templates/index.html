@@ -140,6 +140,7 @@
     .barre-clips .resume { flex:1 1 100%; font-size:.88rem; color:var(--muted); } .barre-clips .resume b { color:var(--text); }
     .barre-clips .btn#telecharger { flex:1; padding:11px 14px; }
     @media (min-width:600px) { .barre-clips .resume { flex:1 1 auto; } .barre-clips .btn#telecharger { flex:none; } }
+    .chaine { margin:4px 0; font-size:.9rem; word-break:break-word; }
     .progress { background:var(--field); border-radius:6px; height:30px; position:relative; overflow:hidden; display:none; margin:8px 0; }
     .progress.show { display:block; }
     .progress .bar { background:var(--accent); height:100%; width:0; transition:width .4s; }
@@ -237,6 +238,12 @@ function dessiner() {
             </div></div>
         ${G.biographie ? `<div class="bio" id="bio">${esc(G.biographie)}</div><a href="#" id="bioPlus" class="muted">Lire la suite</a>` : ''}
         ${(G.erreurs || []).map(e => `<div class="note warn">⚠️ ${esc(e)}</div>`).join('')}
+        <details class="ajout" id="chainesBloc"><summary>📺 Chaînes YouTube officielles (${(G.chaines || []).length})</summary>
+            <div class="aide" style="margin:8px 0">Une vidéo publiée par une de ces chaînes est reconnue « officielle », et leurs vidéos servent à retrouver des clips. MusicBrainz en connaît souvent ; ajoute la chaîne du label si besoin.</div>
+            <div id="chainesListe">${(G.chaines || []).map(ch => `<div class="chaine"><a href="${esc(ch.url)}" target="_blank" rel="noopener">📺 ${esc(ch.nom || ch.id)}</a> <span class="pill">${esc(ch.source)}</span>${ch.source === 'toi' ? ` <a href="#" data-retirer-chaine="${esc(ch.id)}">✕ retirer</a>` : ''}</div>`).join('') || '<div class="muted">Aucune chaîne connue pour ce groupe.</div>'}</div>
+            <div class="search-row" style="margin-top:8px"><input type="text" id="chaineLien" placeholder="https://www.youtube.com/@… ou …/channel/UC…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="chaineAjouter">➕ Ajouter</button></div>
+            <div id="chaineMsg"></div>
+        </details>
     </div>
     <div class="panel">
         <h3 style="margin:0 0 4px">Clips (${liste.length} affichés sur ${G.clips.length})</h3>
@@ -278,6 +285,17 @@ function dessiner() {
         els.forEach(el => { const s2 = el.querySelector('[data-red]'); if (s2) s2.value = mode; });
         note(`${els.length} clip(s) : « ${NOMS_RED[mode]} ».`); $('redTous').value = '';
     };
+    if ($('chaineAjouter')) {
+        $('chaineAjouter').onclick = async () => {
+            const lien = $('chaineLien').value.trim(); if (!lien) return;
+            $('chaineMsg').innerHTML = '<div class="muted" style="margin-top:6px">Lecture de la chaîne…</div>';
+            const r = await post('/api/chaines/ajouter', {mbid: G.fiche.mbid, lien});
+            if (!r.ok) { $('chaineMsg').innerHTML = `<div class="note err">${esc(r.error || 'Ajout impossible.')}</div>`; return; }
+            const mbid = G.fiche.mbid; await ouvrir(mbid, true);               // la liste est refaite : on y cherche les clips de cette chaîne
+            note(`Chaîne « ${r.chaine.nom} » ajoutée : la liste des clips est mise à jour.`);
+        };
+        document.querySelectorAll('[data-retirer-chaine]').forEach(a => a.onclick = async e => { e.preventDefault(); const r = await post('/api/chaines/retirer', {mbid: G.fiche.mbid, id: a.dataset.retirerChaine}); G.chaines = r.chaines || []; dessiner(); });
+    }
     $('ajoutChercher').onclick = ajoutLire;
     $('ajoutLien').onkeydown = e => { if (e.key === 'Enter') ajoutLire(); };
     $('lireFormats').onclick = lireFormats;
@@ -362,7 +380,7 @@ async function voir(i, bouton) {
     if (zone.innerHTML) { zone.innerHTML = ''; return; }                        // 2e appui : on referme
     zone.innerHTML = '<div class="muted" style="margin-top:6px">Recherche des vidéos…</div>';
     if (!AP[titre]) {
-        const d = await post('/api/apercu', {groupe: G.fiche.nom, titre});
+        const d = await post('/api/apercu', {groupe: G.fiche.nom, titre, mbid: G.fiche.mbid});
         if (d.error) { zone.innerHTML = `<div class="note err">${esc(d.error)}</div>`; return; }
         AP[titre] = d.candidats;
     }
@@ -373,7 +391,7 @@ async function voir(i, bouton) {
 function montrer(i, titre, id) {
     const zone = $('voir' + i), c = AP[titre], cur = c.find(x => x.id === id) || c[0];
     zone.innerHTML = `<div class="lecteur" data-id="${esc(cur.id)}"><img src="https://i.ytimg.com/vi/${esc(cur.id)}/hqdefault.jpg" alt="" referrerpolicy="no-referrer"><div class="play">▶</div></div>
-        ${cur.officielle ? '<span class="pill ok">✅ chaîne officielle</span>' : '<span class="pill warn">⚠️ chaîne non reconnue comme officielle : vérifie</span>'}
+        ${cur.officielle ? '<span class="pill ok">✅ chaîne officielle</span>' : `<span class="pill warn">⚠️ chaîne non reconnue comme officielle : vérifie</span> ${cur.channel_id ? '<button class="btn small ghost" data-officielle="1">✅ Cette chaîne est officielle pour ce groupe</button>' : ''}`}
         <div class="muted" style="margin:6px 0">${esc(cur.channel || '')} · « ${esc(cur.title)} » ${cur.duration ? '· ' + dur(cur.duration) : ''} · <a href="${esc(cur.url)}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>
         <div class="muted" style="margin-top:6px">${c.length > 1 ? 'Versions possibles' : 'Version trouvée'} :</div>
         <div class="alt">${c.map(x => `<button data-id="${esc(x.id)}" class="${x.id === cur.id ? 'cur' : ''}">${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}${VER[x.id] ? '<br><span class="muted">' + texteVersion(x.id) + '</span>' : ''}</button>`).join('')}</div>
@@ -384,6 +402,14 @@ function montrer(i, titre, id) {
         <button class="btn small" data-choisir="1">${V[titre] === cur.id ? '✅ Vidéo choisie' : '✅ C’est cette vidéo'}</button>`;
     zone.querySelector('.lecteur').onclick = e => { e.currentTarget.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(cur.id)}?autoplay=1&rel=0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; e.currentTarget.onclick = null; };
     zone.querySelectorAll('.alt button').forEach(b => b.onclick = () => montrer(i, titre, b.dataset.id));
+    const bo = zone.querySelector('[data-officielle]');
+    if (bo) bo.onclick = async () => {
+        const r = await post('/api/chaines/officielle', {mbid: G.fiche.mbid, channel_id: cur.channel_id, nom: cur.channel || ''});
+        if (!r.ok) return note(r.error || 'Choix impossible.', 'err');
+        G.chaines = r.chaines || []; delete AP[titre];
+        const d = await post('/api/apercu', {groupe: G.fiche.nom, titre, mbid: G.fiche.mbid}); AP[titre] = d.candidats || [];
+        montrer(i, titre, cur.id); note(`Chaîne « ${cur.channel} » ajoutée aux chaînes officielles de ${G.fiche.nom}.`);
+    };
     const bq = zone.querySelector('[data-qualites]'); if (bq) bq.onclick = () => qualites(i, titre, cur.id);
     const bv = zone.querySelector('[data-versions]'); if (bv) bv.onclick = () => { bv.disabled = true; bv.textContent = 'Comparaison en cours…'; lireVersions(i, titre); };
     zone.querySelector('[data-choisir]').onclick = () => { V[titre] = cur.id; post('/api/choix', {mbid: G.fiche.mbid, titre, video_id: cur.id}); montrer(i, titre, cur.id); const p = document.querySelectorAll('.clip')[i].querySelector('.voir .btn'); if (p && !p.nextElementSibling.classList.contains('pill')) p.insertAdjacentHTML('afterend', ' <span class="pill ok">vidéo choisie</span>'); };

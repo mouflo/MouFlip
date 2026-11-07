@@ -74,9 +74,11 @@ def chercher_groupes(nom: str, limite: int = 6) -> list[dict]:
 
 def fiche_mb(mbid: str) -> dict:
     d = _get(f"{MB}/artist/{mbid}", {"inc": "aliases+tags+url-rels", "fmt": "json"}) or {}
-    liens = {}
+    liens, youtube = {}, []
     for r in d.get("relations", []):
         u = (r.get("url") or {}).get("resource", "")
+        if r.get("type") == "youtube" and u:
+            youtube.append(u)                                        # chaîne(s) YouTube officielle(s) connue(s) de MusicBrainz
         if r.get("type") == "wikidata":
             liens["wikidata"] = u
         elif r.get("type") == "official homepage":
@@ -85,7 +87,7 @@ def fiche_mb(mbid: str) -> dict:
             liens["wikipedia"] = u
     return {"mbid": d.get("id", mbid), "nom": d.get("name", ""), "type": d.get("type", ""), "pays": d.get("country", ""),
             "debut": ((d.get("life-span") or {}).get("begin") or "")[:4], "alias": [a["name"] for a in d.get("aliases", []) if a.get("name")],
-            "genres": [t["name"] for t in sorted(d.get("tags", []), key=lambda t: -t.get("count", 0))][:5], "liens": liens}
+            "genres": [t["name"] for t in sorted(d.get("tags", []), key=lambda t: -t.get("count", 0))][:5], "liens": liens, "youtube": youtube}
 
 
 def images_audiodb(mbid: str) -> dict:

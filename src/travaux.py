@@ -149,7 +149,7 @@ def _progression(c):
 def _choisir_video(c) -> str:
     if c.get("video_id"):
         return c["video_id"]
-    cands = formats.candidats(c["groupe"], c["titre"])
+    cands = formats.candidats(c["groupe"], c["titre"], chaines=(chaines_fn(c["contexte"]) if chaines_fn else ()))
     sures = [x for x in cands if x.get("officielle")]
     if not sures:
         raise telechargement.TelechargementError("pas de vidéo officielle sûre : regarde-les avec « 👁️ Voir le clip » et choisis la bonne")
@@ -378,6 +378,7 @@ def _existant(chemin: Path) -> dict:
 
 
 emby_artiste_fn = None          # app.py y branche la recherche d'artiste dans Emby (nom -> état)
+chaines_fn = None               # app.py y branche « quelles chaînes YouTube sont officielles pour ce groupe ? » (contexte -> ensemble d'identifiants)
 rg_fn = None                    # app.py y branche « quel groupe de sorties (album) pour ce clip ? » (contexte, titre, album -> id)
 
 

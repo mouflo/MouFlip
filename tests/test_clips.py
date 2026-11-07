@@ -433,6 +433,40 @@ class RoutesTest(unittest.TestCase):
             corps = {"mbid": self.MB, "titres": ["a"], **mauvais}
             self.assertEqual(self.c.post("/api/choix_reduction", json=corps).status_code, 400)
 
+    def test_chaines_officielles_ajouter_marquer_retirer(self):
+        from src import chaines as _ch
+        p1, p2, p3, p4 = self._faux_mb()
+        cid, autre = "UCWFMjDuWKlct0jy89k2kkRA", "UC6YMr57knEIYXOOKMmYAFXQ"
+        with p1, p2, p3, p4, mock.patch.object(self.A, "_fichier_chaines", return_value=Path(self.tmp.name) / "chaines.json"):
+            self.c.get("/api/groupe/" + self.MB)
+            fich = self.A.CACHE_DIR / "groupes" / f"{self.MB}.json"
+            base = json.loads(fich.read_text()); base["chaines_mb"] = [{"id": cid, "nom": "VIVIZ", "url": "u"}]; fich.write_text(json.dumps(base))
+            self.assertEqual([(x["id"], x["source"]) for x in self.c.get("/api/chaines/" + self.MB).get_json()["chaines"]], [(cid, "MusicBrainz")])
+            with mock.patch.object(_ch, "resoudre", return_value={"id": autre, "nom": "BPM Entertainment", "url": f"https://www.youtube.com/channel/{autre}"}):
+                r = self.c.post("/api/chaines/ajouter", json={"mbid": self.MB, "lien": "https://www.youtube.com/@BPM"}).get_json()
+            self.assertEqual([(x["id"], x["source"]) for x in r["chaines"]], [(cid, "MusicBrainz"), (autre, "toi")])
+            self.assertEqual(self.A._ids_chaines(self.MB), {cid, autre})
+            # le bouton « cette chaîne est officielle » du lecteur
+            r = self.c.post("/api/chaines/officielle", json={"mbid": self.MB, "channel_id": "UCqq-ovGE01ErlXakPihhKDA", "nom": "1theK"}).get_json()
+            self.assertEqual(len(r["chaines"]), 3)
+            # l'aperçu juge « officielle » d'après ces chaînes
+            e = {"id": "aaaaaaaaaaa", "title": "VIVIZ - MANIAC", "channel": "BPM Entertainment", "channel_id": autre, "duration": 196}
+            with mock.patch("yt_dlp.YoutubeDL") as yd:
+                yd.return_value.extract_info.return_value = {"entries": [e]}
+                c = self.c.post("/api/apercu", json={"groupe": "VIVIZ", "titre": "MANIAC", "mbid": self.MB}).get_json()["candidats"]
+            self.assertTrue(c[0]["officielle"])
+            # retirer : seulement celles de l'utilisatrice, jamais celle de MusicBrainz
+            r = self.c.post("/api/chaines/retirer", json={"mbid": self.MB, "id": autre}).get_json()
+            self.assertEqual({x["id"] for x in r["chaines"]}, {cid, "UCqq-ovGE01ErlXakPihhKDA"})
+            r = self.c.post("/api/chaines/retirer", json={"mbid": self.MB, "id": cid}).get_json()
+            self.assertIn(cid, {x["id"] for x in r["chaines"]})
+            # entrées invalides
+            self.assertEqual(self.c.post("/api/chaines/officielle", json={"mbid": self.MB, "channel_id": "pas valide"}).status_code, 400)
+            with mock.patch.object(_ch, "resoudre", side_effect=_ch.ChaineError("Colle l'adresse d'une chaîne YouTube")):
+                bad = self.c.post("/api/chaines/ajouter", json={"mbid": self.MB, "lien": "n'importe quoi"})
+            self.assertEqual(bad.status_code, 400)
+            self.assertIn("chaîne YouTube", bad.get_json()["error"])
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)
@@ -549,6 +583,53 @@ class VersionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChainesTest(unittest.TestCase):
+    CID = "UCWFMjDuWKlct0jy89k2kkRA"
+
+    def test_identifiant_dans_l_adresse(self):
+        from src import chaines
+        self.assertEqual(chaines.id_depuis_url(f"https://www.youtube.com/channel/{self.CID}"), self.CID)
+        self.assertEqual(chaines.id_depuis_url("https://www.youtube.com/@VIVIZ_official"), "")        # à résoudre auprès de YouTube
+
+    def test_resoudre_refuse_ce_qui_n_est_pas_une_chaine_youtube(self):
+        from src import chaines
+        for mauvais in ("https://exemple.fr/x", "pas une adresse", f"https://www.youtube.com/watch?v=9JFi7MmjtGA", "https://youtu.be/9JFi7MmjtGA", ""):
+            with self.assertRaises(chaines.ChaineError):
+                chaines.resoudre(mauvais, extraire=lambda u, o: {})
+
+    def test_resoudre_lit_nom_et_identifiant(self):
+        from src import chaines
+        r = chaines.resoudre("youtube.com/@VIVIZ_official", extraire=lambda u, o: {"channel": "Viviz", "channel_id": self.CID})
+        self.assertEqual(r, {"id": self.CID, "nom": "Viviz", "url": f"https://www.youtube.com/channel/{self.CID}"})
+        with self.assertRaises(chaines.ChaineError):
+            chaines.resoudre("https://www.youtube.com/@x", extraire=lambda u, o: {"channel": "x"})   # pas d'identifiant : pas une chaîne
+
+    def test_musicbrainz_donne_la_chaine_du_groupe(self):
+        art = {"id": "x", "name": "VIVIZ", "relations": [{"type": "youtube", "url": {"resource": f"https://www.youtube.com/channel/{self.CID}"}}]}
+        with mock.patch.object(sources, "_get", return_value=art):
+            self.assertEqual(sources.fiche_mb("x")["youtube"], [f"https://www.youtube.com/channel/{self.CID}"])
+
+    def test_video_d_une_chaine_officielle_est_reconnue_meme_sans_mot_cle_de_label(self):
+        e = {"id": "aaaaaaaaaaa", "title": "VIVIZ - MANIAC", "channel": "BPM Entertainment", "channel_id": "UC6YMr57knEIYXOOKMmYAFXQ", "duration": 196}
+        self.assertLess(formats._note(e, "VIVIZ", "MANIAC"), 90)                                         # sans la chaîne : « non reconnue »
+        self.assertGreaterEqual(formats._note(e, "VIVIZ", "MANIAC", {"UC6YMr57knEIYXOOKMmYAFXQ"}), 40 + 35)
+        c = formats.candidats("VIVIZ", "MANIAC", lambda q, o: {"entries": [e]}, chaines={"UC6YMr57knEIYXOOKMmYAFXQ"})
+        self.assertTrue(c[0]["officielle"])
+        self.assertEqual(c[0]["channel_id"], "UC6YMr57knEIYXOOKMmYAFXQ")
+        self.assertFalse(formats.candidats("VIVIZ", "MANIAC", lambda q, o: {"entries": [e]})[0]["officielle"])
+
+    def test_une_chaine_officielle_ne_rend_pas_un_live_acceptable(self):
+        e = {"id": "bbbbbbbbbbb", "title": "VIVIZ - 'MANIAC' Dance Practice", "channel": "VIVIZ", "channel_id": self.CID, "duration": 200}
+        self.assertEqual(formats._note(e, "VIVIZ", "MANIAC", {self.CID}), -100)                         # chorégraphie : toujours écartée
+
+    def test_decouverte_dans_les_videos_de_la_chaine(self):
+        videos = [{"id": "ccccccccccc", "title": "VIVIZ (비비지) - 'Love Love Love' MV", "channel": "VIVIZ", "channel_id": self.CID, "duration": 200},
+                  {"id": "ddddddddddd", "title": "VIVIZ (비비지) - 'Love Love Love' Concert Clip", "channel": "VIVIZ", "channel_id": self.CID, "duration": 209},
+                  {"id": "eeeeeeeeeee", "title": "VIVIZ WORLD TOUR 'NEW LEGACY' LOG EP.08", "channel": "VIVIZ", "channel_id": self.CID, "duration": 900}]
+        r = formats.decouvrir("VIVIZ", {"love love love"}, lambda q, o: {"entries": []}, chaines={self.CID}, videos_chaine=lambda cid: videos)
+        self.assertEqual([(x["titre"], x["video_id"], x["officielle"]) for x in r], [("Love Love Love", "ccccccccccc", True)])
 
 
 class DecouverteTest(unittest.TestCase):

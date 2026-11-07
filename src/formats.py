@@ -35,7 +35,7 @@ def _options(plat: bool = False) -> dict:
     return o
 
 
-def _note(c: dict, groupe: str, titre: str) -> int:
+def _note(c: dict, groupe: str, titre: str, chaines=()) -> int:
     """Points d'une vidéo candidate : plus c'est haut, plus c'est probablement le clip officiel."""
     t = c.get("title") or ""
     nt, ng = normaliser(t), normaliser(groupe)
@@ -49,8 +49,11 @@ def _note(c: dict, groupe: str, titre: str) -> int:
     if _PAS_LE_CLIP.search(reste):
         return -100                                          # live, concert, émission, coulisses… : jamais proposé
     chaine_brute = (c.get("channel") or c.get("uploader") or "")
-    if _CHAINES_PAS_OFFICIELLES.search(chaine_brute) and not any(l in chaine_brute.lower() for l in _LABELS):
+    officielle = bool(c.get("channel_id")) and c.get("channel_id") in chaines                   # chaîne du groupe / du label connue (MusicBrainz ou ajoutée)
+    if not officielle and _CHAINES_PAS_OFFICIELLES.search(chaine_brute) and not any(l in chaine_brute.lower() for l in _LABELS):
         return -100
+    if officielle:
+        note += 35
     if ng and ng.split()[0] in nt:
         note += 8
     if _BON_SIGNE.search(t):
@@ -66,7 +69,7 @@ def _note(c: dict, groupe: str, titre: str) -> int:
     return note
 
 
-def choisir_video(groupe: str, titre: str, extraire=None) -> tuple[dict | None, list[dict]]:
+def choisir_video(groupe: str, titre: str, extraire=None, chaines=()) -> tuple[dict | None, list[dict]]:
     """(meilleur candidat ou None, tous les candidats notés). `extraire(requete, options)` est remplaçable par les tests."""
     from yt_dlp import YoutubeDL
     extraire = extraire or (lambda q, o: YoutubeDL(o).extract_info(q, download=False))
@@ -75,8 +78,8 @@ def choisir_video(groupe: str, titre: str, extraire=None) -> tuple[dict | None, 
     for e in r.get("entries") or []:
         if not e:
             continue
-        cands.append({"id": e.get("id"), "title": e.get("title"), "channel": e.get("channel") or e.get("uploader"), "duration": e.get("duration"),
-                      "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}", "note": _note(e, groupe, titre)})
+        cands.append({"id": e.get("id"), "title": e.get("title"), "channel": e.get("channel") or e.get("uploader"), "channel_id": e.get("channel_id") or "",
+                      "duration": e.get("duration"), "url": e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}", "note": _note(e, groupe, titre, chaines)})
     cands.sort(key=lambda c: -c["note"])
     return (cands[0] if cands and cands[0]["note"] >= 40 else None), cands
 
@@ -97,15 +100,15 @@ def meilleur_format(infos: dict) -> dict | None:
             "audio": {"codec": (a.get("acodec") or "").split(".")[0], "debit_kbps": round(a.get("abr") or a.get("tbr") or 0)} if a else None}
 
 
-def candidats(groupe: str, titre: str, extraire=None, combien: int = 5) -> list[dict]:
+def candidats(groupe: str, titre: str, extraire=None, combien: int = 5, chaines=()) -> list[dict]:
     """Les vidéos YouTube qui pourraient être ce clip, la plus probable d'abord (pour les regarder et choisir). Lève en cas de panne de YouTube."""
-    _choisi, cands = choisir_video(groupe, titre, extraire)
+    _choisi, cands = choisir_video(groupe, titre, extraire, chaines)
     bons = [c for c in cands if c["note"] > -100]
-    officielles = [c for c in bons if c["note"] >= SEUIL_OFFICIEL]
+    officielles = [c for c in bons if c["note"] >= SEUIL_OFFICIEL or c.get("channel_id") in chaines]
     if officielles:                                          # une chaîne officielle existe : les re-publications de fans ne sont même pas montrées
         bons = officielles
-    return [{k: c.get(k) for k in ("id", "title", "channel", "duration", "note")} | {"url": f"https://www.youtube.com/watch?v={c['id']}",
-                                                                                      "officielle": c["note"] >= SEUIL_OFFICIEL}
+    return [{k: c.get(k) for k in ("id", "title", "channel", "channel_id", "duration", "note")} | {"url": f"https://www.youtube.com/watch?v={c['id']}",
+                                                                                                  "officielle": c["note"] >= SEUIL_OFFICIEL or c.get("channel_id") in chaines}
             for c in bons][:combien]
 
 
@@ -132,7 +135,7 @@ def titre_du_clip(titre_video: str, groupe: str) -> str:
     return " ".join(t.split()).strip(" -–—_|")
 
 
-def decouvrir(groupe: str, pistes: set, extraire=None) -> list[dict]:
+def decouvrir(groupe: str, pistes: set, extraire=None, chaines=(), videos_chaine=None) -> list[dict]:
     """Clips officiels trouvés SUR YOUTUBE (une recherche) dont le titre est un morceau des albums du groupe (recoupement avec `pistes`, des titres
     normalisés). Pour les groupes que MusicBrainz connaît mal (titres-phares d'EP sans clip répertorié). Retourne [{titre, video_id, chaine, officielle}]."""
     from yt_dlp import YoutubeDL
@@ -142,20 +145,27 @@ def decouvrir(groupe: str, pistes: set, extraire=None) -> list[dict]:
     except Exception as e:
         logger.warning("Découverte YouTube impossible pour %s : %s", groupe, e)
         return []
+    entrees = list(r.get("entries") or [])
+    if chaines:                                              # + les vidéos des chaînes officielles (la chaîne du groupe, celle de son label)
+        from src import chaines as _chaines
+        lire = videos_chaine or (lambda cid: _chaines.videos(cid))
+        for cid in chaines:
+            entrees += lire(cid)
     meilleurs = {}
-    for e in r.get("entries") or []:
+    for e in entrees:
         if not e or not e.get("id"):
             continue
         titre = titre_du_clip(e.get("title") or "", groupe)
         n = normaliser(titre)
         if not n or n not in pistes:
             continue
-        note = _note(e, groupe, titre)
+        note = _note(e, groupe, titre, chaines)
         if note < 40:                                         # live, émission, fan… ou titre absent : jamais
             continue
+        officielle = note >= SEUIL_OFFICIEL or (e.get("channel_id") in chaines)
         if n not in meilleurs or note > meilleurs[n]["note"]:
             meilleurs[n] = {"titre": titre.strip(), "video_id": e["id"], "chaine": e.get("channel") or e.get("uploader") or "", "note": note,
-                            "officielle": note >= SEUIL_OFFICIEL, "duree": e.get("duration") or 0}
+                            "officielle": officielle, "duree": e.get("duration") or 0}
     return sorted(meilleurs.values(), key=lambda x: -x["note"])
 
 
