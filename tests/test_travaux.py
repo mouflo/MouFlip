@@ -32,14 +32,20 @@ class AudioTest(unittest.TestCase):
         src = self.tmp / "fort.mkv"
         faire_video(src, db_volume=-3)
         avant, _ = audio.mesurer(src)
-        r = audio.normaliser(src, self.tmp / "sortie.mkv", 89.0)
+        r = audio.normaliser(src, self.tmp / "sortie.mkv", 89.0, sans_perte=False)         # réencodage (méthode de secours)
         self.assertTrue(r["retouche"])
-        self.assertAlmostEqual(r["apres"], 89.0, delta=0.7)
+        self.assertAlmostEqual(r["apres"], 89.0, delta=0.8)
         self.assertNotAlmostEqual(avant, 89.0, delta=2.0)                       # le clip d'origine n'était pas à la cible
         s = telechargement.sonder(self.tmp / "sortie.mkv")
         self.assertEqual((s["video"]["codec"], s["audio"]["codec"]), ("h264", "aac"))
         self.assertEqual((s["video"]["largeur"], s["video"]["hauteur"]), (320, 180))
         self.assertTrue(src.exists())                                          # l'original n'est pas touché
+
+    def test_debit_audio_reel_dans_le_nfo(self):
+        src = self.tmp / "d.mkv"
+        faire_video(src)                                                       # son AAC 128k
+        s = telechargement.sonder(src)
+        self.assertTrue(100_000 <= s["audio"]["debit"] <= 150_000, s["audio"])  # le vrai débit, pas celui du réglage d'encodage
 
     def test_video_recopiee_telle_quelle(self):
         src = self.tmp / "a.mkv"
@@ -64,6 +70,75 @@ class AudioTest(unittest.TestCase):
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=10", str(src)], check=True, capture_output=True)
         with self.assertRaises(audio.AudioError):
             audio.normaliser(src, self.tmp / "x.mkv", 89.0)
+
+
+@unittest.skipUnless(audio.aacgain_present(), "AACGain non installé (bash install-aacgain.sh)")
+class SansPerteTest(unittest.TestCase):
+    """Réglage du volume SANS réencodage (AACGain) : la compression du son n'est pas touchée, seul son niveau change (paliers de 1,5 dB)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def _paquets_audio(p):
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size", "-of", "csv=p=0", str(p)],
+                             capture_output=True, text=True).stdout.split()
+        return len(out), sum(int(x.rstrip(",")) for x in out if x.rstrip(",").isdigit())
+
+    def test_niveau_a_moins_de_un_palier_de_la_cible_sans_toucher_au_son(self):
+        src = self.tmp / "fort.mkv"
+        faire_video(src, db_volume=-3)
+        r = audio.normaliser(src, self.tmp / "sortie.mkv", 89.0)
+        self.assertEqual(r["methode"], "sans perte (AACGain)")
+        self.assertTrue(r["retouche"])
+        self.assertLessEqual(abs(r["apres"] - 89.0), 0.8)                       # au pire un demi-palier de 1,5 dB
+        n_avant, _ = self._paquets_audio(src)
+        n_apres, _ = self._paquets_audio(self.tmp / "sortie.mkv")
+        self.assertEqual(n_avant, n_apres)                                     # mêmes paquets audio : rien n'est réencodé
+        s = telechargement.sonder(self.tmp / "sortie.mkv")
+        self.assertEqual((s["video"]["codec"], s["audio"]["codec"]), ("h264", "aac"))
+
+    def test_gain_arrondi_au_palier_et_original_intact(self):
+        src = self.tmp / "a.mkv"
+        faire_video(src, db_volume=-3)
+        avant, _ = audio.mesurer(src)
+        r = audio.normaliser(src, self.tmp / "b.mkv", avant + 4.4)               # 4,4 dB demandés -> 3 paliers = 4,5 dB
+        self.assertEqual(r["gain"], 4.5)
+        self.assertAlmostEqual(audio.mesurer(self.tmp / "b.mkv")[0], avant + 4.5, delta=0.15)
+        self.assertAlmostEqual(audio.mesurer(src)[0], avant, delta=0.01)       # le fichier de départ n'est pas modifié
+
+    def test_deja_a_un_demi_palier_rien_n_est_retouche(self):
+        src = self.tmp / "c.mkv"
+        faire_video(src)
+        niveau, _ = audio.mesurer(src)
+        r = audio.normaliser(src, self.tmp / "d.mkv", niveau + 0.6)
+        self.assertFalse(r["retouche"])
+
+    def test_pas_de_saturation_en_montant_le_volume(self):
+        src = self.tmp / "e.mkv"
+        faire_video(src, db_volume=-1)                                         # crête déjà haute
+        r = audio.normaliser(src, self.tmp / "f.mkv", 99.0)                      # on demande bien plus fort que possible
+        _, crete = audio.mesurer(self.tmp / "f.mkv")
+        self.assertLess(crete, 1.02)
+
+    def test_son_qui_n_est_pas_de_l_aac_se_rabat_sur_le_reencodage(self):
+        src = self.tmp / "opus.mkv"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=160x90:rate=10", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=2:sample_rate=48000", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-shortest", str(src)],
+                       check=True, capture_output=True)
+        r = audio.normaliser(src, self.tmp / "o.mkv", 89.0)
+        self.assertTrue(r["methode"].startswith("réencodé"))
+        self.assertAlmostEqual(r["apres"], 89.0, delta=0.8)
+
+    def test_sans_aacgain_ou_option_coupee_le_son_est_refait(self):
+        src = self.tmp / "g.mkv"
+        faire_video(src, db_volume=-3)
+        self.assertTrue(audio.normaliser(src, self.tmp / "h.mkv", 89.0, sans_perte=False)["methode"].startswith("réencodé"))
+        with mock.patch.object(audio, "AACGAIN", self.tmp / "absent"):
+            self.assertTrue(audio.normaliser(src, self.tmp / "i.mkv", 89.0)["methode"].startswith("réencodé"))
 
 
 class NfoTest(unittest.TestCase):

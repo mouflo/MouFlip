@@ -24,9 +24,9 @@ _CFG = {"dossier": None, "cible_db": audio.REFERENCE_DB, "debit": "192k", "racin
 ETATS_ACTIFS = ("attente", "telechargement", "audio")
 
 
-def configurer(dossier_donnees, racine_fn, cible_fn, debit_fn, emby):
+def configurer(dossier_donnees, racine_fn, cible_fn, debit_fn, emby, sans_perte_fn=lambda: True):
     """racine_fn() = dossier « Video clip » ; cible_fn() = niveau en dB ; debit_fn() = débit AAC ; emby = client Emby."""
-    _CFG.update(dossier=Path(dossier_donnees) / "travail", racine=racine_fn, cible=cible_fn, debit=debit_fn, emby=emby)
+    _CFG.update(dossier=Path(dossier_donnees) / "travail", racine=racine_fn, cible=cible_fn, debit=debit_fn, emby=emby, sans_perte=sans_perte_fn)
     _CFG["dossier"].mkdir(parents=True, exist_ok=True)
     _charger()
 
@@ -130,14 +130,9 @@ def _preparer(c):
         _maj(c, etat="audio", progres=100, message="Mesure et réglage du volume…")
         source = Path(t["fichier"])
         fini = dossier / "clip.mkv"
-        a = audio.normaliser(source, fini, float(_CFG["cible"]()), _CFG["debit"]())
+        a = audio.normaliser(source, fini, float(_CFG["cible"]()), _CFG["debit"](), bool(_CFG["sans_perte"]()))
         poster = telechargement.vignette_en_jpg(t["vignette"], str(fini), dossier / "poster.jpg")
         sonde = telechargement.sonder(fini)
-        if sonde.get("audio") is not None and not sonde["audio"].get("debit"):              # mkv n'indique pas toujours le débit audio : celui demandé à l'encodage
-            try:
-                sonde["audio"]["debit"] = int(str(_CFG["debit"]()).lower().rstrip("k")) * 1000
-            except ValueError:
-                pass
         try:
             source.unlink()
         except OSError:
@@ -145,7 +140,7 @@ def _preparer(c):
         _maj(c, fichier=str(fini), poster=poster, sonde=sonde, audio=a, titre_youtube=t["titre"], chaine=t["chaine"])
         c["plan"] = [{k: v for k, v in l.items() if k not in ("contenu",)} for l in construire_plan(c)]
         v = sonde["video"]
-        msg = f"Prêt à ranger : {v['hauteur']}p {v['codec']}, volume {a['avant']} → {a['apres']} dB" + (" (limiteur actif)" if a["limiteur"] else "") + "."
+        msg = f"Prêt à ranger : {v['hauteur']}p {v['codec']}, volume {a['avant']} → {a['apres']} dB ({a.get('methode', '')})" + (", limiteur actif" if a["limiteur"] else "") + "."
         _maj(c, etat="pret", progres=100, message=msg)
         logger.info("[Travaux] %s - %s : %s", c["groupe"], c["titre"], msg)
     except (telechargement.TelechargementError, audio.AudioError) as e:

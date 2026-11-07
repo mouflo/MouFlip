@@ -31,7 +31,8 @@ CONFIG = load_config()
 EMBY = EmbyClient(CONFIG.get("emby", {}))
 DOSSIER_CLIPS = (CONFIG.get("clips") or {}).get("dossier") or "/mnt/mouflosyno/Emby-Media/Video clip"
 AUDIO = {"cible_db": float(((CONFIG.get("clips") or {}).get("audio") or {}).get("target_db", audio.REFERENCE_DB)),
-         "debit": str(((CONFIG.get("clips") or {}).get("audio") or {}).get("bitrate", "192k"))}
+         "debit": str(((CONFIG.get("clips") or {}).get("audio") or {}).get("bitrate", "192k")),
+         "sans_perte": bool(((CONFIG.get("clips") or {}).get("audio") or {}).get("lossless", True))}
 
 
 def _version() -> str:
@@ -343,7 +344,7 @@ _route_cle("imvdb", "IMVDB_API_KEY", _tester_imvdb)
 def api_audio():
     """Volume des clips (même réglage que les thèmes de MouFlopening : 89 dB) et débit AAC de la piste refaite."""
     if request.method == "GET":
-        return jsonify(AUDIO)
+        return jsonify({**AUDIO, "aacgain": audio.aacgain_present()})
     b = request.get_json(silent=True) or {}
     try:
         cible = round(float(str(b.get("target_db", "")).replace(",", ".")), 1)
@@ -360,12 +361,13 @@ def api_audio():
         cfg = json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else {}
     except ValueError:
         return jsonify({"ok": False, "error": "config.json est illisible : rien n'a été modifié."}), 500
-    cfg.setdefault("clips", {}).setdefault("audio", {}).update(target_db=cible, bitrate=debit)
+    cfg.setdefault("clips", {}).setdefault("audio", {}).update(target_db=cible, bitrate=debit, lossless=bool(b.get("sans_perte", AUDIO["sans_perte"])))
     tmp = chemin.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, chemin)
-    AUDIO.update(cible_db=cible, debit=debit)
-    return jsonify({"ok": True, "message": f"Enregistré : les prochains clips seront à {cible:g} dB (audio AAC {debit}). Les clips déjà rangés ne changent pas."})
+    AUDIO.update(cible_db=cible, debit=debit, sans_perte=bool(b.get("sans_perte", AUDIO["sans_perte"])))
+    return jsonify({"ok": True, "message": f"Enregistré : les prochains clips seront à {cible:g} dB ("
+                    + ("réglage sans perte quand le son est en AAC, sinon " if AUDIO["sans_perte"] else "") + f"AAC {debit} refait). Les clips déjà rangés ne changent pas."})
 
 
 _APERCUS = {}                      # (groupe, titre) -> (heure, candidats) : 30 min
@@ -409,7 +411,7 @@ def api_outils():
         except PackageNotFoundError:
             return ""
     return jsonify({"yt_dlp": v("yt-dlp"), "yt_dlp_ejs": v("yt-dlp-ejs"), "deno": (_cmd_version("deno", "--version") or "").replace("deno ", ""),
-                    "ffmpeg": bool(shutil.which("ffmpeg")), "cookies": ytcookies.state(), "racine": DOSSIER_CLIPS, "racine_ok": Path(DOSSIER_CLIPS).is_dir(),
+                    "ffmpeg": bool(shutil.which("ffmpeg")), "aacgain": audio.aacgain_present(), "cookies": ytcookies.state(), "racine": DOSSIER_CLIPS, "racine_ok": Path(DOSSIER_CLIPS).is_dir(),
                     "emby": EMBY.describe()})
 
 
@@ -484,7 +486,7 @@ import redemarrage
 redemarrage.init_app(app, BASE_DIR)
 import redemarrer
 redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe())
-travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY)
+travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"])
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")
 
 def _mise_a_jour_ytdlp(premiere_attente=120, toutes=24 * 3600):

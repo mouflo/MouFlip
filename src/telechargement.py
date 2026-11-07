@@ -1,5 +1,5 @@
 """Télécharger un clip (yt-dlp, avec les cookies réglés) à la MEILLEURE qualité : résolution la plus haute puis débit le plus élevé
-(« -S res,tbr »), vidéo + audio fusionnés en mkv SANS réencodage. Tout se passe dans un dossier de travail, jamais dans « Video clip »."""
+(« -S res,tbr »), vidéo + audio fusionnés en mkv SANS réencodage. L'audio AAC est préféré à l'Opus : AACGain règle son volume sans perte. Tout se passe dans un dossier de travail, jamais dans « Video clip »."""
 import json
 import logging
 import shutil
@@ -23,7 +23,7 @@ def place_libre_go(dossier) -> float:
 
 
 def options(dossier: Path, progression=None) -> dict:
-    o = {"format": "bv*+ba/b", "format_sort": ["res", "tbr"], "merge_output_format": "mkv", "outtmpl": str(dossier / "source.%(ext)s"),
+    o = {"format": "bv*+ba[acodec^=mp4a]/bv*+ba/b", "format_sort": ["res", "tbr"], "merge_output_format": "mkv", "outtmpl": str(dossier / "source.%(ext)s"),
          "noplaylist": True, "quiet": True, "no_warnings": True, "retries": 5, "fragment_retries": 5, "socket_timeout": 30,
          "writethumbnail": True, "overwrites": True, "noprogress": True}
     if progression:
@@ -71,6 +71,13 @@ def sonder(fichier) -> dict:
     except ValueError:
         pass
     duree = float((d.get("format") or {}).get("duration") or v.get("duration") or 0)
+    if a and not (a.get("bit_rate") or (a.get("tags") or {}).get("BPS")) and duree > 0:          # mkv n'indique pas le débit audio : somme des paquets / durée
+        try:
+            pk = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size", "-of", "csv=p=0", str(fichier)],
+                                capture_output=True, text=True, timeout=120).stdout.split()
+            a = {**a, "bit_rate": int(sum(int(x) for x in pk if x.isdigit()) * 8 / duree)}
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
     debit_total = int(float((d.get("format") or {}).get("bit_rate") or 0))
     debit_audio = int(float((a or {}).get("bit_rate") or (a or {}).get("tags", {}).get("BPS") or 0))
     return {"duree": duree, "taille": int(float((d.get("format") or {}).get("size") or 0)),
