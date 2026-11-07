@@ -182,6 +182,7 @@ class RoutesTest(unittest.TestCase):
         (self.racine / "BLACKPINK" / "BORN PINK").mkdir(parents=True)
         (self.racine / "BLACKPINK" / "BORN PINK" / "BLACKPINK - BORN PINK - Pink Venom.mkv").write_bytes(b"x")
         self._racine, A.DOSSIER_CLIPS = A.DOSSIER_CLIPS, str(self.racine)
+        self._cache, A.CACHE_DIR = A.CACHE_DIR, Path(self.tmp.name) / "cache"          # jamais le vrai cache enregistré
         A._CACHE_GROUPES.clear()
         self.c = A.app.test_client()
         self.c.environ_base["REMOTE_ADDR"] = "192.168.1.50"
@@ -189,6 +190,7 @@ class RoutesTest(unittest.TestCase):
 
     def tearDown(self):
         self.A.DOSSIER_CLIPS = self._racine
+        self.A.CACHE_DIR = self._cache
         for k, v in self._env.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         self.tmp.cleanup()
@@ -205,12 +207,71 @@ class RoutesTest(unittest.TestCase):
         avant = sorted(str(p) for p in self.racine.rglob("*"))
         with mock.patch.object(sources, "fiche_mb", return_value={"mbid": mb, "nom": "BLACKPINK", "alias": [], "genres": ["k-pop"]}), \
                 mock.patch.object(sources, "clips_mb", return_value=clips), \
-                mock.patch.object(sources, "images_audiodb", return_value={"biographie": "Un groupe.", "images": {}}):
+                mock.patch.object(sources, "images_audiodb", return_value={"biographie": "Un groupe.", "images": {}}), \
+                mock.patch.object(sources, "images_fanart", return_value={"cle": False, "images": {}, "albums": {}}):
             d = self.c.get("/api/groupe/" + mb).get_json()
         self.assertEqual([(c["titre"], c["deja"]) for c in d["clips"]], [("Pink Venom", True), ("Shut Down", False)])
         self.assertTrue(d["clips"][1]["chemin_prevu"].endswith("/BLACKPINK/BORN PINK/BLACKPINK - BORN PINK - Shut Down.mkv"))
         self.assertEqual(d["nb_locaux"], 1)
         self.assertEqual(avant, sorted(str(p) for p in self.racine.rglob("*")))     # rien d'écrit dans « Video clip »
+
+    MB = "48646387-1664-4c9a-9139-9bfd091b823c"
+
+    def _faux_mb(self, clips=None):
+        clips = clips or [{"titre": "Pink Venom", "album": "BORN PINK", "annee": "2022", "mbid": "1", "type": "clip", "duree": 193}]
+        return (mock.patch.object(sources, "fiche_mb", return_value={"mbid": self.MB, "nom": "BLACKPINK", "alias": [], "genres": ["k-pop"]}),
+                mock.patch.object(sources, "clips_mb", return_value=clips),
+                mock.patch.object(sources, "images_audiodb", return_value={"biographie": "Un groupe.", "images": {}}),
+                mock.patch.object(sources, "images_fanart", return_value={"cle": False, "images": {}, "albums": {}}))
+
+    def test_liste_enregistree_pas_redemandee_puis_actualisee(self):
+        p1, p2, p3, p4 = self._faux_mb()
+        with p1, p2 as clips_mb, p3, p4:
+            a = self.c.get("/api/groupe/" + self.MB).get_json()
+            b = self.c.get("/api/groupe/" + self.MB).get_json()
+            self.assertEqual(clips_mb.call_count, 1)                           # la 2e ouverture lit la liste enregistrée
+            self.assertTrue(b["depuis_cache"])
+            self.assertEqual(a["clips"], b["clips"])
+            self.assertTrue((self.A.CACHE_DIR / "groupes" / f"{self.MB}.json").exists())
+            self.c.get("/api/groupe/" + self.MB + "?actualiser=1")
+            self.assertEqual(clips_mb.call_count, 2)                           # « Actualiser » redemande
+
+    def test_musicbrainz_en_panne_la_liste_enregistree_sert_quand_meme(self):
+        p1, p2, p3, p4 = self._faux_mb()
+        with p1, p2, p3, p4:
+            self.c.get("/api/groupe/" + self.MB)
+        with mock.patch.object(sources, "fiche_mb", side_effect=sources.SourceIndisponible("musicbrainz.org ne répond pas")):
+            d = self.c.get("/api/groupe/" + self.MB + "?actualiser=1").get_json()
+        self.assertEqual([c["titre"] for c in d["clips"]], ["Pink Venom"])
+        self.assertTrue(any("liste enregistrée" in e for e in d["erreurs"]))
+        autre = "11111111-2222-3333-4444-555555555555"
+        with mock.patch.object(sources, "fiche_mb", side_effect=sources.SourceIndisponible("musicbrainz.org ne répond pas")):
+            r = self.c.get("/api/groupe/" + autre)
+        self.assertEqual(r.status_code, 502)                                   # jamais vu et MusicBrainz en panne : erreur dite
+
+    def test_la_deja_la_se_recalcule_meme_avec_la_liste_enregistree(self):
+        p1, p2, p3, p4 = self._faux_mb()
+        with p1, p2, p3, p4:
+            a = self.c.get("/api/groupe/" + self.MB).get_json()
+            self.assertTrue(a["clips"][0]["deja"])
+            (self.racine / "BLACKPINK" / "BORN PINK" / "BLACKPINK - BORN PINK - Pink Venom.mkv").unlink()
+            b = self.c.get("/api/groupe/" + self.MB).get_json()
+        self.assertFalse(b["clips"][0]["deja"])                                # l'état local n'est jamais enregistré
+
+    def test_recherche_enregistree_et_secours_en_panne(self):
+        g = [{"mbid": self.MB, "nom": "BLACKPINK", "score": 100}]
+        with mock.patch.object(sources, "chercher_groupes", return_value=g) as ch:
+            self.c.get("/api/groupes/chercher?q=blackpink")
+            self.c.get("/api/groupes/chercher?q=BlackPink")
+            self.assertEqual(ch.call_count, 1)
+        fichier = self.A.CACHE_DIR / "recherches.json"
+        d = json.loads(fichier.read_text())
+        d[list(d)[0]]["date"] = 0                                              # vieille recherche : redemandée, mais gardée si MusicBrainz tombe
+        fichier.write_text(json.dumps(d))
+        with mock.patch.object(sources, "chercher_groupes", side_effect=sources.SourceIndisponible("musicbrainz.org ne répond pas")):
+            r = self.c.get("/api/groupes/chercher?q=blackpink").get_json()
+        self.assertEqual(r["groupes"], g)
+        self.assertIn("enregistrés", r["avertissement"])
 
     def test_identifiant_invalide(self):
         self.assertEqual(self.c.get("/api/groupe/pas-un-id").status_code, 400)
@@ -302,6 +363,33 @@ class ApercuTest(unittest.TestCase):
         self.assertFalse(any(str(a).startswith("ytsearch") for a in appels))   # pas de recherche : la vidéo est déjà choisie
         r2 = formats.analyser("BLACKPINK", "Pink Venom", extraire, video_id="pas valide")
         self.assertTrue(any(str(a).startswith("ytsearch") for a in appels))    # identifiant douteux : on cherche
+
+
+class VersionsTest(unittest.TestCase):
+    FORMATS = [{"format_id": "313", "height": 2160, "width": 3840, "vcodec": "vp09.00.50.08", "tbr": 17045, "fps": 24, "filesize": 393_000_000},
+               {"format_id": "401", "height": 2160, "width": 3840, "vcodec": "av01.0.12M.08", "tbr": 12607, "fps": 24, "filesize": 291_000_000},
+               {"format_id": "251", "acodec": "opus", "vcodec": "none", "abr": 133, "filesize": 3_000_000},
+               {"format_id": "140", "acodec": "mp4a.40.2", "vcodec": "none", "abr": 129, "filesize": 3_100_000}]
+
+    def test_format_et_taille_d_une_version(self):
+        r = formats.infos_version("gQlMMD8auMs", lambda q, o: {"title": "t", "channel": "BLACKPINK", "duration": 194, "upload_date": "20220819", "formats": self.FORMATS})
+        self.assertEqual((r["etat"], r["format"]["resolution"], r["format"]["codec"]), ("ok", "2160p", "vp9"))
+        self.assertEqual(r["taille"], 393_000_000 + 3_100_000)                  # meilleure image + son AAC (celui qui sera pris)
+        self.assertEqual(r["format"]["audio_aac"]["debit_kbps"], 129)
+        self.assertEqual(r["annee"], "2022")
+
+    def test_taille_estimee_quand_youtube_ne_la_donne_pas(self):
+        fmts = [{"format_id": "1", "height": 1080, "vcodec": "vp9", "tbr": 4000}, {"format_id": "2", "acodec": "mp4a.40.2", "vcodec": "none", "abr": 128}]
+        r = formats.infos_version("abcdefghijk", lambda q, o: {"duration": 200, "formats": fmts})
+        self.assertEqual(r["taille"], int(4000 * 1000 * 200 / 8) + int(128 * 1000 * 200 / 8))
+
+    def test_identifiant_invalide_et_panne(self):
+        self.assertEqual(formats.infos_version("pas valide")["etat"], "erreur")
+        def casse(q, o):
+            raise RuntimeError("HTTP 429")
+        r = formats.infos_version("abcdefghijk", casse)
+        self.assertEqual(r["etat"], "erreur")
+        self.assertIn("429", r["erreur"])
 
 
 if __name__ == "__main__":

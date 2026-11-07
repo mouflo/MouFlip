@@ -27,7 +27,7 @@ class SourceIndisponible(Exception):
     pass
 
 
-def _get(url, params=None, max_essais=3):
+def _get(url, params=None, max_essais=5):
     """GET JSON poli (MusicBrainz : une requête par seconde). Lève SourceIndisponible avec un message clair."""
     derniere = None
     for essai in range(max_essais):
@@ -44,8 +44,12 @@ def _get(url, params=None, max_essais=3):
             time.sleep(1.5)
             continue
         if r.status_code in (429, 503):
-            derniere = f"trop de demandes (code {r.status_code})"
-            time.sleep(2 + essai * 2)
+            derniere = f"serveur occupé (code {r.status_code})"
+            try:
+                attente = float(r.headers.get("Retry-After") or 0)
+            except ValueError:
+                attente = 0
+            time.sleep(min(30, max(attente, 3 * (2 ** essai))))             # 3, 6, 12, 24 s : MusicBrainz est parfois surchargé quelques minutes
             continue
         if r.status_code == 404:
             return None

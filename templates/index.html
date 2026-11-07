@@ -96,7 +96,7 @@ async function api(url, opts) {
 const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
 function note(text, kind) { $('msg').innerHTML = text ? `<div class="note ${kind || ''}">${esc(text)}</div>` : ''; }
 
-let G = null, F = {}, V = {}, AP = {};   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
+let G = null, F = {}, V = {}, AP = {}, VER = {};   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
 
 async function chercher() {
     const q = $('q').value.trim(); if (q.length < 2) return;
@@ -108,10 +108,10 @@ async function chercher() {
     $('cands').innerHTML = d.groupes.map(g => `<div class="cand" data-id="${esc(g.mbid)}"><b>${esc(g.nom)} <small>${esc([g.type, g.pays, g.debut, g.precision].filter(Boolean).join(' · '))}</small></b><span class="pill">${g.score} %</span></div>`).join('');
     document.querySelectorAll('.cand').forEach(el => el.addEventListener('click', () => ouvrir(el.dataset.id)));
 }
-async function ouvrir(mbid) {
-    note('Lecture de la fiche et de la liste des clips (jusqu’à une minute)…');
+async function ouvrir(mbid, actualiser) {
+    note(actualiser ? 'Mise à jour de la liste auprès de MusicBrainz (jusqu’à une minute)…' : 'Lecture de la fiche et de la liste des clips…');
     $('groupe').hidden = true;
-    const d = await api('/api/groupe/' + mbid);
+    const d = await api('/api/groupe/' + mbid + (actualiser ? '?actualiser=1' : ''));
     if (d.error) return note(d.error, 'err');
     note(''); $('cands').innerHTML = ''; G = d; F = {}; AP = {};
     const ch = await api('/api/choix/' + mbid); V = ch.choix || {};
@@ -146,6 +146,7 @@ function dessiner() {
     </div>
     <div class="panel">
         <h3 style="margin:0 0 4px">Clips (${liste.length} affichés sur ${G.clips.length})</h3>
+        <div class="muted">${G.enregistre ? '📌 Liste enregistrée le ' + new Date(G.enregistre * 1000).toLocaleDateString('fr-FR') + ' (pas redemandée à chaque fois) · ' : ''}<a href="#" id="actualiser">🔄 Actualiser la liste</a></div>
         <div class="muted">Liste de MusicBrainz : elle peut être incomplète ou contenir des vidéos qui ne sont pas des clips ; ce sera affiné.</div>
         <div class="toolbar">
             <select id="fTypes"><option value="clip">Vrais clips</option><option value="autre">Autres vidéos (concerts, coulisses…)</option><option value="tous">Tout</option></select>
@@ -160,6 +161,7 @@ function dessiner() {
     $('fTypes').onchange = $('fDeja').onchange = () => { dessiner.t = $('fTypes').value; dessiner.d = $('fDeja').value; dessiner(); };
     $('toutCocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = true);
     $('toutDecocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = false);
+    if ($('actualiser')) $('actualiser').onclick = e => { e.preventDefault(); ouvrir(G.fiche.mbid, true); };
     $('lireFormats').onclick = lireFormats;
     $('telecharger').onclick = telechargerCoches;
     document.querySelectorAll('[data-voir]').forEach(b => b.onclick = () => voir(Number(b.dataset.voir), b));
@@ -173,6 +175,27 @@ function ligne(c, i) {
         <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
         <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div>
         <div class="voir"><button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''}<div id="voir${i}"></div></div></div>`;
+}
+const taille = o => !o ? '' : o >= 1e9 ? (o / 1e9).toFixed(2).replace('.', ',') + ' Go' : Math.round(o / 1e6) + ' Mo';
+function texteVersion(id) {
+    const r = VER[id];
+    if (!r) return '';
+    if (r.etat !== 'ok') return `⚠️ ${esc(r.erreur || 'illisible')}`;
+    const f = r.format;
+    return `<b>${esc(f.resolution)}</b> ${esc(f.codec)} ${f.debit_kbps} kb/s${f.fps ? ' · ' + Math.round(f.fps) + ' i/s' : ''}${f.premium ? ' · ⭐' : ''} · son ${f.audio_aac ? 'AAC ' + f.audio_aac.debit_kbps + ' kb/s' : '(pas d’AAC)'} · <b>${taille(r.taille)}</b>${r.annee ? ' · ' + esc(r.annee) : ''}`;
+}
+function majVersions(i, titre) {                                      // met à jour les lignes sans recharger le lecteur
+    document.querySelectorAll('#voir' + i + ' .alt button').forEach(b => {
+        const x = AP[titre].find(y => y.id === b.dataset.id);
+        b.innerHTML = `${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}` + (VER[x.id] ? '<br><span class="muted">' + texteVersion(x.id) + '</span>' : '<br><span class="muted">lecture…</span>');
+    });
+}
+async function lireVersions(i, titre) {
+    for (const x of AP[titre]) {
+        if (!VER[x.id]) { majVersions(i, titre); VER[x.id] = await post('/api/apercu/version', {video_id: x.id}); }
+        majVersions(i, titre);
+    }
+    const bv = document.querySelector('#voir' + i + ' [data-versions]'); if (bv) bv.textContent = '📊 Formats lus';
 }
 const dur = s => s ? Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') : '';
 async function voir(i, bouton) {
@@ -193,10 +216,13 @@ function montrer(i, titre, id) {
     zone.innerHTML = `<div class="lecteur" data-id="${esc(cur.id)}"><img src="https://i.ytimg.com/vi/${esc(cur.id)}/hqdefault.jpg" alt="" referrerpolicy="no-referrer"><div class="play">▶</div></div>
         ${cur.officielle ? '<span class="pill ok">✅ chaîne officielle</span>' : '<span class="pill warn">⚠️ chaîne non reconnue comme officielle : vérifie</span>'}
         <div class="muted" style="margin:6px 0">${esc(cur.channel || '')} · « ${esc(cur.title)} » ${cur.duration ? '· ' + dur(cur.duration) : ''} · <a href="${esc(cur.url)}" target="_blank" rel="noopener">Ouvrir sur YouTube</a></div>
-        ${c.length > 1 ? '<div class="muted">Autres vidéos possibles :</div><div class="alt">' + c.map(x => `<button data-id="${esc(x.id)}" class="${x.id === cur.id ? 'cur' : ''}">${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}</button>`).join('') + '</div>' : ''}
+        <div class="muted" style="margin-top:6px">${c.length > 1 ? 'Versions possibles' : 'Version trouvée'} :</div>
+        <div class="alt">${c.map(x => `<button data-id="${esc(x.id)}" class="${x.id === cur.id ? 'cur' : ''}">${esc(x.channel || '')} · ${esc(x.title)} ${x.duration ? '(' + dur(x.duration) + ')' : ''}${VER[x.id] ? '<br><span class="muted">' + texteVersion(x.id) + '</span>' : ''}</button>`).join('')}</div>
+        <button class="btn small ghost" data-versions="1">📊 Format et taille de chaque version</button>
         <button class="btn small" data-choisir="1">${V[titre] === cur.id ? '✅ Vidéo choisie' : '✅ C’est cette vidéo'}</button>`;
     zone.querySelector('.lecteur').onclick = e => { e.currentTarget.innerHTML = `<iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(cur.id)}?autoplay=1&rel=0" allow="autoplay; encrypted-media; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`; e.currentTarget.onclick = null; };
     zone.querySelectorAll('.alt button').forEach(b => b.onclick = () => montrer(i, titre, b.dataset.id));
+    const bv = zone.querySelector('[data-versions]'); if (bv) bv.onclick = () => { bv.disabled = true; bv.textContent = 'Lecture des formats…'; lireVersions(i, titre); };
     zone.querySelector('[data-choisir]').onclick = () => { V[titre] = cur.id; post('/api/choix', {mbid: G.fiche.mbid, titre, video_id: cur.id}); montrer(i, titre, cur.id); const p = document.querySelectorAll('.clip')[i].querySelector('.voir .btn'); if (p && !p.nextElementSibling.classList.contains('pill')) p.insertAdjacentHTML('afterend', ' <span class="pill ok">vidéo choisie</span>'); };
 }
 async function lireFormats() {

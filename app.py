@@ -66,7 +66,7 @@ apparence.init_app(app)
 
 FORMATS = {}                       # jobs de lecture des formats : id -> {"total", "fait", "resultats", "fini"}
 _FORMATS_VERROU = threading.Lock()
-_CACHE_GROUPES = {}                # mbid -> (heure, données) : 10 min, pour ne pas redemander à MusicBrainz à chaque clic
+_CACHE_GROUPES = {}                # (ancien cache en mémoire : remplacé par l'enregistrement sur disque ; gardé vide pour les réglages)
 OUTILS_ETAT = {}
 
 
@@ -74,32 +74,64 @@ def _roots():
     return [DOSSIER_CLIPS]
 
 
-def _groupe_complet(mbid: str) -> dict:
-    """Fiche + clips d'un groupe, avec l'état « déjà dans la médiathèque » et le chemin de rangement prévu. Rien n'est écrit."""
-    en_cache = _CACHE_GROUPES.get(mbid)
-    if en_cache and time.time() - en_cache[0] < 600:
-        base = en_cache[1]
-    else:
-        erreurs = []
-        fiche = sources.fiche_mb(mbid)
-        clips = sources.clips_mb(mbid, fiche.get("nom", ""))
-        audiodb, wiki = {}, ""
+CACHE_DIR = BASE_DIR / "data" / "cache"
+
+
+def _ecrire_json(chemin: Path, data):
+    import json
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    tmp = chemin.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, chemin)
+
+
+def _lire_json(chemin: Path):
+    import json
+    try:
+        return json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _construire_base(mbid: str) -> dict:
+    """Interroge MusicBrainz, TheAudioDB, fanart.tv et Wikipédia (le plus long : jusqu'à une minute). Lève SourceIndisponible si MusicBrainz ne répond pas."""
+    erreurs = []
+    fiche = sources.fiche_mb(mbid)
+    clips = sources.clips_mb(mbid, fiche.get("nom", ""))
+    audiodb, wiki = {}, ""
+    try:
+        audiodb = sources.images_audiodb(mbid)
+    except sources.SourceIndisponible as e:
+        erreurs.append(str(e))
+    fanart = {"cle": False, "images": {}, "albums": {}}
+    try:
+        fanart = sources.images_fanart(mbid)
+    except sources.SourceIndisponible as e:
+        erreurs.append(str(e))
+    if not (audiodb.get("biographie")):
         try:
-            audiodb = sources.images_audiodb(mbid)
+            wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
         except sources.SourceIndisponible as e:
             erreurs.append(str(e))
-        fanart = {"cle": False, "images": {}, "albums": {}}
+    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "enregistre": time.time()}
+
+
+def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
+    """Fiche + clips d'un groupe, avec l'état « déjà dans la médiathèque » et le chemin de rangement prévu. Rien n'est écrit dans « Video clip ».
+    La liste trouvée est ENREGISTRÉE sur le serveur (data/cache/groupes/<id>.json) et réutilisée tant qu'on ne demande pas de l'actualiser :
+    MusicBrainz n'est pas redemandé à chaque ouverture, et si MusicBrainz est en panne, la liste enregistrée sert quand même."""
+    fichier = CACHE_DIR / "groupes" / f"{mbid}.json"
+    avertissement = ""
+    base = None if actualiser else (_lire_json(fichier))
+    if base is None:
         try:
-            fanart = sources.images_fanart(mbid)
+            base = _construire_base(mbid)
+            _ecrire_json(fichier, base)
         except sources.SourceIndisponible as e:
-            erreurs.append(str(e))
-        if not (audiodb.get("biographie")):
-            try:
-                wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
-            except sources.SourceIndisponible as e:
-                erreurs.append(str(e))
-        base = {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart}
-        _CACHE_GROUPES[mbid] = (time.time(), base)
+            base = _lire_json(fichier)
+            if base is None:
+                raise
+            avertissement = f"MusicBrainz ne répond pas ({e}) : la liste enregistrée est gardée."
     fiche = base["fiche"]
     dossier = existants.dossier_du_groupe(DOSSIER_CLIPS, [fiche["nom"]] + fiche.get("alias", []))
     locaux = existants.lister(dossier) if dossier else []
@@ -112,8 +144,8 @@ def _groupe_complet(mbid: str) -> dict:
     return {"fiche": fiche, "dossier_groupe": str(dossier) if dossier else "", "dossier_nouveau": not dossier, "nb_locaux": len(locaux),
             "biographie": base["audiodb"].get("biographie") or base["wikipedia"], "biographie_langue": base["audiodb"].get("biographie_langue") or ("fr" if base["wikipedia"] else ""),
             "images": {**base["audiodb"].get("images", {}), **base["fanart"]["images"]}, "images_album": base["fanart"]["albums"],
-            "fanart_cle": base["fanart"]["cle"], "clips": clips, "erreurs": base["erreurs"], "racine": DOSSIER_CLIPS,
-            "racine_ok": Path(DOSSIER_CLIPS).is_dir()}
+            "fanart_cle": base["fanart"]["cle"], "clips": clips, "erreurs": base["erreurs"] + ([avertissement] if avertissement else []), "racine": DOSSIER_CLIPS,
+            "racine_ok": Path(DOSSIER_CLIPS).is_dir(), "enregistre": base.get("enregistre", 0), "depuis_cache": not actualiser and not avertissement and bool(base.get("enregistre"))}
 
 
 @app.route("/")
@@ -126,10 +158,22 @@ def api_chercher():
     q = (request.args.get("q") or "").strip()
     if len(q) < 2:
         return jsonify({"groupes": []})
+    cle = noms.normaliser(q) or q.lower()
+    fichier = CACHE_DIR / "recherches.json"
+    enregistrees = _lire_json(fichier) or {}
+    ancien = enregistrees.get(cle)
+    if ancien and time.time() - ancien["date"] < 7 * 24 * 3600:
+        return jsonify({"groupes": ancien["groupes"]})
     try:
-        return jsonify({"groupes": sources.chercher_groupes(q)})
+        groupes = sources.chercher_groupes(q)
     except sources.SourceIndisponible as e:
+        if ancien:                                                    # panne : la recherche enregistrée sert quand même
+            return jsonify({"groupes": ancien["groupes"], "avertissement": f"MusicBrainz ne répond pas ({e}) : résultats enregistrés."})
         return jsonify({"error": f"MusicBrainz est injoignable : {e}. Réessaie dans un instant."}), 502
+    if groupes:
+        enregistrees[cle] = {"date": time.time(), "groupes": groupes}
+        _ecrire_json(fichier, enregistrees)
+    return jsonify({"groupes": groupes})
 
 
 @app.route("/api/groupe/<mbid>")
@@ -137,7 +181,7 @@ def api_groupe(mbid):
     if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
         return jsonify({"error": "Identifiant de groupe invalide."}), 400
     try:
-        return jsonify(_groupe_complet(mbid))
+        return jsonify(_groupe_complet(mbid, actualiser=request.args.get("actualiser") == "1"))
     except sources.SourceIndisponible as e:
         return jsonify({"error": f"MusicBrainz est injoignable : {e}. Réessaie dans un instant."}), 502
 
@@ -391,6 +435,22 @@ def api_apercu():
         return jsonify({"error": f"YouTube ne répond pas : {str(e)[:160]}"}), 502
     _APERCUS[cle] = (time.time(), c)
     return jsonify({"candidats": c})
+
+
+_VERSIONS = {}                     # id de vidéo -> (heure, infos) : 1 h
+
+
+@app.route("/api/apercu/version", methods=["POST"])
+def api_version():
+    """Format et taille d'une des vidéos possibles pour un clip (pour comparer les versions). Lecture seule."""
+    vid = str((request.get_json(silent=True) or {}).get("video_id", ""))
+    ancien = _VERSIONS.get(vid)
+    if ancien and time.time() - ancien[0] < 3600:
+        return jsonify(ancien[1])
+    r = formats.infos_version(vid)
+    if r.get("etat") == "ok":
+        _VERSIONS[vid] = (time.time(), r)
+    return jsonify(r)
 
 
 def _cmd_version(cmd, *args):

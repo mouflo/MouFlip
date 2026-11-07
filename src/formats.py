@@ -109,6 +109,38 @@ def candidats(groupe: str, titre: str, extraire=None, combien: int = 5) -> list[
             for c in bons][:combien]
 
 
+def _taille(f: dict, duree: float) -> int:
+    """Taille d'un flux : la taille annoncée par YouTube, sinon estimée (débit × durée)."""
+    t = f.get("filesize") or f.get("filesize_approx")
+    if t:
+        return int(t)
+    return int((f.get("tbr") or f.get("abr") or 0) * 1000 * (duree or 0) / 8)
+
+
+def infos_version(video_id: str, extraire=None) -> dict:
+    """Format et TAILLE de ce qu'on téléchargerait pour cette vidéo (meilleure image + meilleur son AAC). Lecture seule. Ne lève jamais."""
+    from yt_dlp import YoutubeDL
+    extraire = extraire or (lambda q, o: YoutubeDL(o).extract_info(q, download=False))
+    if not re.fullmatch(r"[\w-]{11}", video_id or ""):
+        return {"etat": "erreur", "erreur": "identifiant de vidéo invalide"}
+    try:
+        infos = extraire(f"https://www.youtube.com/watch?v={video_id}", _options()) or {}
+    except Exception as e:
+        return {"etat": "erreur", "erreur": f"YouTube : {str(e)[:140]}"}
+    fmt = meilleur_format(infos)
+    if not fmt:
+        return {"etat": "erreur", "erreur": "aucun format vidéo lisible"}
+    duree = infos.get("duration") or 0
+    videos = {f.get("format_id"): f for f in infos.get("formats") or []}
+    v = videos.get(fmt["format_id"]) or {}
+    aacs = [f for f in infos.get("formats") or [] if f.get("vcodec") in (None, "none") and (f.get("acodec") or "").startswith("mp4a")]
+    a = max(aacs, key=lambda f: f.get("abr") or f.get("tbr") or 0) if aacs else None
+    fmt["audio_aac"] = {"codec": "aac", "debit_kbps": round(a.get("abr") or a.get("tbr") or 0)} if a else None
+    taille = _taille(v, duree) + (_taille(a, duree) if a else 0)
+    return {"etat": "ok", "format": fmt, "duree": duree, "taille": taille, "titre": infos.get("title", ""), "chaine": infos.get("channel", ""),
+            "annee": (infos.get("upload_date") or "")[:4]}
+
+
 def analyser(groupe: str, titre: str, extraire=None, video_id: str = "") -> dict:
     """Résultat complet pour un clip. Ne lève jamais : une panne de YouTube est dite (« erreur »), pas confondue avec « introuvable ».
     `video_id` : la vidéo que tu as choisie en la regardant (sinon la plus probable)."""
