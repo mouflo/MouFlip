@@ -608,6 +608,17 @@ def api_travaux_ranger(tid):
     return jsonify(r), (200 if r.get("ok") else 409)
 
 
+@app.route("/api/travaux/convention", methods=["POST"])
+def api_travaux_convention_tous():
+    return jsonify(travaux.mettre_tous_a_la_convention())
+
+
+@app.route("/api/travaux/<tid>/convention", methods=["POST"])
+def api_travaux_convention(tid):
+    r = travaux.mettre_a_la_convention(tid)
+    return jsonify(r), (200 if r.get("ok") else 409)
+
+
 @app.route("/api/travaux/<tid>/relancer", methods=["POST"])
 def api_travaux_relancer(tid):
     return jsonify(travaux.relancer(tid))

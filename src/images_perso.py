@@ -17,7 +17,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 UA = "MouFlip/0.1 (appli personnelle de rangement de clips)"
-TYPES = ("logo", "vignette", "banniere", "fanart", "couverture", "cdart", "poster")
+TYPES = ("logo", "vignette", "banniere", "fanart", "couverture", "cdart", "poster", "thumb")
 FORMAT = {"logo": "PNG", "cdart": "PNG"}                         # les autres : JPEG
 MAX_OCTETS = 15 * 1024 * 1024
 MIN_COTE, MAX_COTE = 100, 4000

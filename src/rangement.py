@@ -25,7 +25,7 @@ def _image_ligne(url: str) -> dict:
 
 
 def plan(racine, dossier_groupe_existant, groupe, album, titre, fichier_video, poster=None, nfo_clip="", nfo_artiste="", images_groupe=None, images_album=None,
-         remplacer=()) -> list[dict]:
+         remplacer=(), thumb=None) -> list[dict]:
     """La liste exacte de ce qui serait créé. Chaque ligne : {type, chemin, existe, cle?, remplacer?, taille?}. Aucune écriture.
     `remplacer` : clés d'images que l'utilisatrice a CHOISI de remplacer (vignette, banniere, logo, album_couverture, album_cdart) : l'ancienne est sauvegardée."""
     racine = Path(racine)
@@ -46,13 +46,17 @@ def plan(racine, dossier_groupe_existant, groupe, album, titre, fichier_video, p
     if nfo_clip:
         ajouter("nfo", a / f"{stem}.nfo", contenu=nfo_clip)
     if poster:
-        ajouter("image", a / f"{stem}-poster.jpg", source=str(poster))
+        # le poster d'un clip est, comme dans ta médiathèque, la POCHETTE de l'album (adresse d'Internet ou fichier ajouté : « file://… ») ; à défaut une image du clip
+        pl = _image_ligne(str(poster)) if str(poster).startswith(("http://", "https://", "file://")) else {"source": str(poster)}
+        ajouter("image", a / f"{stem}-poster.jpg", **pl)
         if not (images_album or {}).get("couverture"):
-            ajouter("image", a / "folder.jpg", source=str(poster))          # pas de pochette connue : le poster du premier clip (jamais remplacé ensuite)
+            ajouter("image", a / "folder.jpg", **pl)                        # pas de pochette connue : l'image du clip (jamais remplacée ensuite)
     if (images_album or {}).get("couverture"):
         ajouter("image", a / "folder.jpg", **_image_ligne(images_album["couverture"]), cle="album_couverture", remplacer="album_couverture" in remplacer)
     if (images_album or {}).get("cdart"):
         ajouter("image", a / "cdart.png", **_image_ligne(images_album["cdart"]), cle="album_cdart", remplacer="album_cdart" in remplacer)
+    if thumb:                                                              # la VIGNETTE (« Thumb » d'Emby, format paysage) : l'image du clip, à côté de la pochette-poster
+        ajouter("image", a / f"{stem}-thumb.jpg", **(_image_ligne(str(thumb)) if str(thumb).startswith(("http://", "https://", "file://")) else {"source": str(thumb)}))
     if nfo_artiste:
         ajouter("nfo", g / "artist.nfo", contenu=nfo_artiste)
     for cle, nom in IMAGES_GROUPE:

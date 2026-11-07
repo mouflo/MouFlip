@@ -109,7 +109,7 @@ def _choix_par_defaut(ctx) -> dict:
     """Les choix d'images : ceux déjà faits pour ce groupe (réutilisés pour ses autres clips), sinon « le premier de chaque type » (None)."""
     memo = _choix_groupe(ctx.get("mbid", ""))
     return {"images": {**{t: None for t in TYPES_IMAGES}, "fanart": None, **(memo.get("images") or {})},
-            "album": {"couverture": None, "cdart": None}, "biographie": None, "poster": None,
+            "album": {"couverture": None, "cdart": None}, "biographie": None, "poster": None, "vignette_clip": None,
             "artiste": memo.get("artiste")}
 
 
@@ -282,11 +282,34 @@ def _nfo_clip(c) -> str:
     return nfo.nfo_clip(c["titre"], c["annee"], nom_artiste(c), c["album"], c.get("sonde") or {}, c.get("mbid_clip", ""), c.get("video_id", ""))
 
 
+def _chemin_vignette_clip(c) -> str:
+    """La vignette (Thumb d'Emby) : l'image du clip choisie dans la fiche ; par défaut la vignette YouTube (16:9), sinon la première image du clip."""
+    posters = c.get("posters") or []
+    voulu = (c.get("choix") or {}).get("vignette_clip")
+    for p in posters:
+        if p["id"] == voulu:
+            return p["fichier"]
+    return posters[0]["fichier"] if posters else ""
+
+
+def poster_choisi_id(c, images_album=None) -> str | None:
+    """Quel poster pour le clip : celui choisi dans la fiche ; par défaut la POCHETTE de l'album (comme les autres clips de la médiathèque) quand on en a une,
+    sinon la vignette du clip."""
+    voulu = (c.get("choix") or {}).get("poster")
+    if voulu:
+        return voulu
+    if images_album is None:
+        images_album = _images_effectives(c)[1]
+    return "pochette" if images_album.get("couverture") else ((c.get("posters") or [{}])[0].get("id"))
+
+
 def construire_plan(c) -> list[dict]:
     racine, _g, _a = _dossiers(c)
     images, images_album, remplacer = _images_effectives(c)
-    return rangement.plan(racine, c["contexte"].get("dossier_groupe") or "", c["groupe"], c["album"], c["titre"], c["fichier"], _chemin_poster(c),
-                          _nfo_clip(c), _nfo_artiste(c), images, images_album, remplacer)
+    voulu = poster_choisi_id(c, images_album)
+    poster = images_album["couverture"] if voulu == "pochette" and images_album.get("couverture") else _chemin_poster(c)
+    return rangement.plan(racine, c["contexte"].get("dossier_groupe") or "", c["groupe"], c["album"], c["titre"], c["fichier"], poster,
+                          _nfo_clip(c), _nfo_artiste(c), images, images_album, remplacer, thumb=_chemin_vignette_clip(c))
 
 
 def _preparer(c):
@@ -422,6 +445,17 @@ couvertures_fn = None           # app.py y branche « pochettes d'album trouvée
 rg_fn = None                    # app.py y branche « quel groupe de sorties (album) pour ce clip ? » (contexte, titre, album -> id)
 
 
+def _posters_fiche(c, images_album) -> list[dict]:
+    """Les posters proposés : d'abord la POCHETTE de l'album (celle qui sera posée, comme dans le reste de la médiathèque), puis les images du clip."""
+    sortie = []
+    if images_album.get("couverture"):
+        choisi = (c.get("choix") or {}).get("album", {}).get("couverture")
+        cands = _candidats(c, "couverture")
+        x = next((x for x in cands if x["url"] == choisi), None) if choisi else (cands[0] if cands else None)
+        sortie.append({"id": "pochette", "label": "Pochette de l'album : comme tes autres clips", "apercu": (x or {}).get("apercu") or (x or {}).get("url") or images_album["couverture"]})
+    return sortie + [{"id": p["id"], "label": p["label"]} for p in (c.get("posters") or [])]
+
+
 def fiche(tid) -> dict | None:
     with _VERROU:
         c = TRAVAUX.get(tid)
@@ -454,8 +488,10 @@ def fiche(tid) -> dict | None:
                            "codec": v.get("codec"), "debit": v.get("debit"), "fps": v.get("fps")},
                  "audio": {"codec": a.get("codec"), "debit": a.get("debit"), "canaux": a.get("canaux")},
                  "volume": c.get("audio") or {}, "reduction": c.get("reduction") or {}, "destination": nom_video, "nfo": _nfo_clip(c),
-                 "posters": [{"id": p["id"], "label": p["label"]} for p in (c.get("posters") or [])],
-                 "poster_choisi": choix.get("poster") or ((c.get("posters") or [{}])[0].get("id") if c.get("posters") else None),
+                 "posters": _posters_fiche(c, images_album),
+                 "poster_choisi": poster_choisi_id(c, images_album),
+                 "vignettes": [{"id": p["id"], "label": p["label"]} for p in (c.get("posters") or [])],
+                 "vignette_choisie": next((p["id"] for p in (c.get("posters") or []) if p["fichier"] == _chemin_vignette_clip(c)), None),
                  "dossier_album_existe": dossier_album.exists()},
         "groupe": {"nom": c["groupe"], "pays": (ctx.get("fiche") or {}).get("pays", ""), "debut": (ctx.get("fiche") or {}).get("debut", ""),
                    "genre": ctx.get("genre", ""), "biographie": bio, "biographie_defaut": ctx.get("biographie", ""),
@@ -529,8 +565,12 @@ def enregistrer_choix(tid, donnees: dict):
         if nom is not None and (not isinstance(nom, str) or not nom.strip() or len(nom) > 120 or "\n" in nom):
             return None, "Nom d'artiste invalide."
         choix["artiste"] = nom.strip() if nom else None
+    if "vignette_clip" in donnees:
+        if donnees["vignette_clip"] is not None and donnees["vignette_clip"] not in {p["id"] for p in c.get("posters") or []}:
+            return None, "Vignette inconnue."
+        choix["vignette_clip"] = donnees["vignette_clip"]
     if "poster" in donnees:
-        if donnees["poster"] is not None and donnees["poster"] not in {p["id"] for p in c.get("posters") or []}:
+        if donnees["poster"] is not None and donnees["poster"] not in {p["id"] for p in c.get("posters") or []} | {"pochette"}:
             return None, "Poster inconnu."
         choix["poster"] = donnees["poster"]
     c["poster"] = _chemin_poster(c)
@@ -559,7 +599,7 @@ def ajouter_image(tid, type_, octets: bytes, nom: str = ""):
     if type_ not in images_perso.TYPES:
         return None, "Type d'image inconnu."
     try:
-        if type_ == "poster":
+        if type_ in ("poster", "thumb"):
             contenu, ext = images_perso.preparer(type_, octets)
             dossier = _CFG["dossier"] / c["id"]
             dossier.mkdir(parents=True, exist_ok=True)
@@ -567,7 +607,7 @@ def ajouter_image(tid, type_, octets: bytes, nom: str = ""):
             fichier = dossier / f"poster_{pid}.{ext}"
             fichier.write_bytes(contenu)
             c.setdefault("posters", []).append({"id": pid, "label": "Image ajoutée par toi", "fichier": str(fichier)})
-            c.setdefault("choix", _choix_par_defaut(c["contexte"]))["poster"] = pid
+            c.setdefault("choix", _choix_par_defaut(c["contexte"]))["vignette_clip" if type_ == "thumb" else "poster"] = pid
             c["poster"] = _chemin_poster(c)
             _maj(c)
             return fiche(tid), ""
@@ -592,3 +632,58 @@ def ajouter_image(tid, type_, octets: bytes, nom: str = ""):
     c["plan"] = [{k: v for k, v in l.items() if k not in ("contenu",)} for l in construire_plan(c)]
     _maj(c)
     return fiche(tid), ""
+
+
+def mettre_a_la_convention(tid) -> dict:
+    """Pour un clip DÉJÀ rangé : le poster devient la pochette de l'album (comme le reste de la médiathèque) et l'ancienne image du clip (16:9) devient sa
+    vignette « …-thumb.jpg ». Rien d'autre n'est touché ; l'ancien poster est sauvegardé d'abord ; Emby est prévenu. Retourne {ok, message}."""
+    from PIL import Image
+    with _VERROU:
+        c = TRAVAUX.get(tid)
+    if not c or c["etat"] != "range":
+        return {"ok": False, "error": "Ce clip n'est pas rangé."}
+    lignes = c.get("plan") or []
+    video = next((Path(l["chemin"]) for l in lignes if l["type"] == "video"), None)
+    if not video or not video.exists():
+        return {"ok": False, "error": "Le clip rangé est introuvable (le partage est-il monté ?). Rien n'a été modifié."}
+    album, stem = video.parent, video.stem
+    poster, thumb, dossier_img = album / f"{stem}-poster.jpg", album / f"{stem}-thumb.jpg", album / "folder.jpg"
+    if not poster.exists() or not dossier_img.exists():
+        return {"ok": False, "error": "Il manque le poster ou la pochette de l'album : rien n'a été modifié."}
+    def forme(p):
+        with Image.open(p) as im:
+            return im.size
+    lp, hp = forme(poster)
+    lf, hf = forme(dossier_img)
+    if not 0.8 <= lf / hf <= 1.25:
+        return {"ok": False, "error": f"L'image de l'album n'est pas une pochette carrée ({lf}×{hf}) : rien n'a été modifié."}
+    faits = []
+    if lp / hp >= 1.4 and not thumb.exists():                          # l'ancien poster est l'image paysage du clip : elle devient la vignette
+        thumb.write_bytes(poster.read_bytes())
+        faits.append("vignette « -thumb.jpg » créée avec l'ancienne image du clip")
+    if poster.read_bytes() != dossier_img.read_bytes():
+        sauv = _CFG["dossier"].parent / "sauvegardes" / time.strftime("%Y-%m-%d_%H%M%S")
+        sauv.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(poster, sauv / f"{album.name} - {poster.name}")
+        poster.write_bytes(dossier_img.read_bytes())
+        faits.append("poster remplacé par la pochette de l'album (l'ancien est sauvegardé)")
+    if not faits:
+        return {"ok": True, "message": "Déjà à la convention : rien à faire."}
+    emby = rangement.prevenir_emby(_CFG["emby"], str(album.parent))
+    return {"ok": True, "message": "; ".join(faits).capitalize() + ". " + emby}
+
+
+def mettre_tous_a_la_convention() -> dict:
+    """Applique la convention à tous les clips rangés de la liste. Retourne {ok, faits, deja, refuses: [(titre, raison)]}."""
+    with _VERROU:
+        ids = [(tid, c["titre"]) for tid, c in TRAVAUX.items() if c["etat"] == "range"]
+    faits, deja, refuses = 0, 0, []
+    for tid, titre in ids:
+        r = mettre_a_la_convention(tid)
+        if not r["ok"]:
+            refuses.append((titre, r["error"]))
+        elif r["message"].startswith("Déjà"):
+            deja += 1
+        else:
+            faits += 1
+    return {"ok": True, "faits": faits, "deja": deja, "refuses": refuses, "total": len(ids)}

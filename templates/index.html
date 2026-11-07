@@ -547,10 +547,22 @@ async function suivreTravaux() {
     const liste = d.travaux || [];
     $('travaux').hidden = !liste.length;
     resumeTravaux(liste);
-    $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
+    const rangesN = liste.filter(t => t.etat === 'range').length;
+    $('travauxListe').innerHTML = (rangesN ? `<div class="acts" style="margin:8px 0"><button class="btn small ghost" id="conventionTous">🖼️ Mettre les ${rangesN} clip(s) rangé(s) à ma façon : poster = pochette, vignette = image du clip</button></div>` : '') + (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
     ajusterBas();
     document.querySelectorAll('[data-fiche]').forEach(b => b.onclick = () => ouvrirFiche(b.dataset.fiche));
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
+    if ($('conventionTous')) $('conventionTous').onclick = async () => {
+        if (!await MouConfirm('Mettre tous les clips rangés à ta façon de faire ?\n\nPour chacun : le poster devient la pochette de l’album, et son ancienne image (16:9) devient sa vignette « -thumb.jpg ». Les anciens posters sont sauvegardés. Un clip sans pochette carrée n’est pas touché.', {ok: 'Mettre à jour', annuler: 'Annuler'})) return;
+        note('Mise à jour des clips rangés…');
+        const r = await post('/api/travaux/convention');
+        note(`${r.faits} clip(s) mis à jour, ${r.deja} déjà bien${(r.refuses || []).length ? ', ' + r.refuses.length + ' non touché(s) : ' + r.refuses.map(x => x[0] + ' (' + x[1] + ')').join(' ; ') : ''}.`, (r.refuses || []).length ? 'warn' : '');
+    };
+    document.querySelectorAll('[data-convention]').forEach(b => b.onclick = async () => {
+        if (!await MouConfirm('Mettre ce clip à ta façon de faire ?\n\nSon poster devient la pochette de l’album, et son ancienne image (16:9) devient sa vignette « -thumb.jpg ». L’ancien poster est sauvegardé.', {ok: 'Mettre à jour', annuler: 'Annuler'})) return;
+        const r = await post('/api/travaux/' + b.dataset.convention + '/convention');
+        note(r.message || r.error || 'Fait.', r.ok ? '' : 'err'); suivreTravaux();
+    });
     document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
     document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
     if (liste.some(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
@@ -617,7 +629,7 @@ function rendreFiche() {
     <div class="fi-hero" style="${fond ? `background-image:url('${esc(fond)}')` : ''}">
         <div class="fi-haut"><button class="btn small ghost" data-fermer="1">← Retour</button><span class="pill ok">🧾 Fiche · ce qui sera dans Emby</span></div>
         <div class="fi-entete">
-            <div class="affiche" style="${posterId ? `background-image:url('${urlPoster(f.id, posterId)}')` : ''}"></div>
+            <div class="affiche" style="${posterId ? `background-image:url('${esc((c.posters.find(p => p.id === posterId) || {}).apercu || urlPoster(f.id, posterId))}')` : ''}${posterId === 'pochette' ? ';background-size:contain;background-repeat:no-repeat;background-position:center' : ''}"></div>
             <div class="titres">${logoUrl ? `<img class="logo" referrerpolicy="no-referrer" src="${esc(logoUrl)}" alt="">` : ''}
                 <h2>${esc(c.titre)}</h2>
                 <div class="sous">${esc(c.groupe)} · ${esc(c.album)}${c.annee ? ' · ' + esc(c.annee) : ''}</div>
@@ -634,8 +646,10 @@ function rendreFiche() {
             <dt>Taille</dt><dd>${taille(c.taille)}${c.reduction && c.reduction.fait ? ` <span class="pill ok">réduite : ${taille(c.reduction.avant)} → ${taille(c.reduction.apres)} (${Math.round(100 * c.reduction.apres / c.reduction.avant)} %)</span>` : (c.reduction && c.reduction.raison ? ` <span class="pill">non réduite : ${esc(c.reduction.raison)}</span>` : '')}</dd><dt>Source</dt><dd>${esc(c.chaine || '')} · « ${esc(c.titre_youtube || '')} »</dd>
             <dt>Fichier</dt><dd>${esc(c.destination)}</dd>
         </dl>
-        <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera sur la vignette du clip dans Emby (« …-poster.jpg »).</div>
-        <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), (p.id === 'yt' ? etiquette('YouTube') : p.id.startsWith('perso') ? etiquette('toi') : etiquette('vidéo')) + ' ' + esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>${tuilesAjout('poster')}
+        <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera pour ce clip dans Emby (« …-poster.jpg »). Par défaut, comme tes autres clips : la <b>pochette de l'album</b>.</div>
+        <div class="bande">${c.posters.map(p => vign(p.id === 'pochette' ? 'carre' : 'fond', p.apercu || urlPoster(f.id, p.id), (p.id === 'pochette' ? etiquette('album') : p.id === 'yt' ? etiquette('YouTube') : p.id.startsWith('perso') ? etiquette('toi') : etiquette('vidéo')) + ' ' + esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>${tuilesAjout('poster')}
+        <h3 style="margin-top:12px">Vignette du clip</h3><div class="aide">Image paysage (16:9) que Emby montre en mode vignettes (« …-thumb.jpg »), à côté de la pochette-poster. Par défaut : la vignette du clip sur YouTube.</div>
+        <div class="bande">${c.vignettes.map(p => vign('fond', urlPoster(f.id, p.id), (p.id === 'yt' ? etiquette('YouTube') : p.id.startsWith('perso') ? etiquette('toi') : etiquette('vidéo')) + ' ' + esc(p.label), p.id === c.vignette_choisie, `data-vignette-clip="${esc(p.id)}"`)).join('')}</div>${tuilesAjout('thumb')}
       </section>
       <section class="fi"><h3>🔗 Lien avec Emby</h3>${blocEmby(f)}</section>
       <section class="fi"><h3>🎤 Le groupe : ${esc(g.nom)}</h3>
@@ -670,6 +684,7 @@ function rendreFiche() {
     const corps = $('ficheCorps');
     corps.querySelectorAll('[data-fermer]').forEach(b => b.onclick = fermerFiche);
     corps.querySelectorAll('[data-poster]').forEach(b => b.onclick = () => choixFiche({poster: b.dataset.poster}));
+    corps.querySelectorAll('[data-vignette-clip]').forEach(b => b.onclick = () => choixFiche({vignette_clip: b.dataset.vignetteClip}));
     corps.querySelectorAll('[data-ajout-fichier]').forEach(b => b.onclick = () => { const inp = $('fichierImg'); inp.dataset.type = b.dataset.ajoutFichier; inp.value = ''; inp.click(); });
     corps.querySelectorAll('[data-ajout-lien]').forEach(b => b.onclick = async () => {
         const lien = await MouPrompt('Adresse de l’image (https://…)', '', {ok: 'Ajouter', annuler: 'Annuler'});
@@ -754,6 +769,7 @@ function carteTravail(t) {
         <div class="acts">
         ${t.etat === 'pret' ? `<button class="btn small" data-fiche="${t.id}">🧾 Ouvrir la fiche (images, textes, infos)</button><button class="btn small ghost" data-ranger="${t.id}" data-nom="${esc(t.titre)}">📁 Ranger tout de suite</button>` : ''}
         ${t.etat === 'erreur' ? `<button class="btn small" data-relancer="${t.id}">↻ Relancer</button>` : ''}
+        ${t.etat === 'range' ? `<button class="btn small ghost" data-convention="${t.id}" title="Poster = pochette de l’album, vignette = image du clip">🖼️ Poster = pochette</button>` : ''}
         ${actif ? '' : `<button class="btn small ghost" data-retirer="${t.id}">Retirer de la liste</button>`}</div></div>`;
 }
 async function rangerClip(id, nom) {

@@ -406,6 +406,75 @@ class FicheTest(unittest.TestCase):
         self.assertEqual(c["rg"], "rg1")
         self.assertEqual(len(f["album"]["couverture"]["candidats"]), 2)
 
+    def test_poster_du_clip_par_defaut_c_est_la_pochette_de_l_album(self):
+        """Comme dans la médiathèque de l'utilisatrice : « …-poster.jpg » est la pochette carrée de l'album, pas la vignette 16:9 du clip."""
+        f = travaux.fiche(self.tid)
+        self.assertEqual(f["clip"]["poster_choisi"], "pochette")
+        self.assertEqual(f["clip"]["posters"][0]["id"], "pochette")
+        self.assertEqual(f["clip"]["posters"][0]["apercu"], "http://i/c1.jpg")                       # la première pochette proposée, celle qui sera posée
+        plan = {"/".join(Path(l["chemin"]).parts[-2:]): l for l in f["plan"] if l["type"] == "image"}      # « LEMONADE/folder.jpg » (album) ≠ « aespa/folder.jpg » (groupe)
+        self.assertEqual(plan["LEMONADE/aespa - LEMONADE - LEMONADE-poster.jpg"]["url"], "http://i/c1.jpg")   # le poster du clip = la pochette
+        self.assertEqual(plan["LEMONADE/folder.jpg"]["url"], "http://i/c1.jpg")                                # = l'image de l'album
+        self.assertNotIn("source", plan["LEMONADE/aespa - LEMONADE - LEMONADE-poster.jpg"])                    # et pas une image du clip
+        self.assertTrue(len(f["clip"]["posters"]) >= 4)                                              # les images du clip restent proposées, ensuite
+
+    def test_la_vignette_du_clip_est_l_image_paysage_a_cote_de_la_pochette(self):
+        """Convention vue dans la médiathèque (Tsubasa, Vibrato) : folder.jpg = pochette, « <clip>-thumb.jpg » = vignette que Emby affiche en « Thumb »."""
+        f = travaux.fiche(self.tid)
+        plan = {"/".join(Path(l["chemin"]).parts[-2:]): l for l in f["plan"] if l["type"] == "image"}
+        self.assertEqual(plan["LEMONADE/aespa - LEMONADE - LEMONADE-poster.jpg"]["url"], "http://i/c1.jpg")          # poster = pochette
+        self.assertTrue(plan["LEMONADE/aespa - LEMONADE - LEMONADE-thumb.jpg"]["source"].endswith(".jpg"))            # vignette = image du clip
+        self.assertNotIn("url", plan["LEMONADE/aespa - LEMONADE - LEMONADE-thumb.jpg"])
+        self.assertEqual(f["clip"]["vignette_choisie"], f["clip"]["vignettes"][0]["id"])
+        self.assertEqual(f["clip"]["vignettes"][0]["id"], "yt")                                                      # par défaut : la vignette YouTube
+        f, err = travaux.enregistrer_choix(self.tid, {"vignette_clip": "f58"})
+        self.assertEqual(err, "")
+        plan = {"/".join(Path(l["chemin"]).parts[-2:]): l for l in f["plan"] if l["type"] == "image"}
+        self.assertTrue(plan["LEMONADE/aespa - LEMONADE - LEMONADE-thumb.jpg"]["source"].endswith("image_58.jpg"))
+        self.assertIsNone(travaux.enregistrer_choix(self.tid, {"vignette_clip": "inconnue"})[0])
+
+    def test_vignette_ajoutee_a_la_main_et_rangee(self):
+        images_perso.configurer(self.tmp / "data")
+        f, err = travaux.ajouter_image(self.tid, "thumb", png_octets(1280, 720, mode="RGB"), "vignette.jpg")
+        self.assertEqual(err, "")
+        self.assertEqual(f["clip"]["vignette_choisie"], "perso1")
+        with mock.patch.object(rangement.requests, "get", return_value=mock.Mock(status_code=200, content=b"IMG")):
+            r = travaux.ranger(self.tid)
+        self.assertTrue(r["ok"], r)
+        album = self.racine / "aespa/LEMONADE"
+        from PIL import Image
+        self.assertEqual(Image.open(album / "aespa - LEMONADE - LEMONADE-thumb.jpg").size, (1280, 720))               # la vignette ajoutée, en paysage
+        self.assertEqual((album / "aespa - LEMONADE - LEMONADE-poster.jpg").read_bytes(), (album / "folder.jpg").read_bytes())   # le poster = la pochette
+
+    def test_sans_pochette_le_poster_est_une_image_du_clip(self):
+        travaux.TRAVAUX[self.tid]["rg"] = ""
+        f = travaux.fiche(self.tid)
+        self.assertNotEqual(f["clip"]["poster_choisi"], "pochette")
+        plan = {"/".join(Path(l["chemin"]).parts[-2:]): l for l in f["plan"] if l["type"] == "image"}
+        self.assertTrue(plan["LEMONADE/aespa - LEMONADE - LEMONADE-poster.jpg"]["source"].endswith(".jpg"))   # faute de pochette : image du clip
+        self.assertEqual(plan["LEMONADE/folder.jpg"]["source"], plan["LEMONADE/aespa - LEMONADE - LEMONADE-poster.jpg"]["source"])
+
+    def test_poster_du_clip_choisi_explicitement_est_respecte(self):
+        f, err = travaux.enregistrer_choix(self.tid, {"poster": "f35"})
+        self.assertEqual(err, "")
+        plan = {"/".join(Path(l["chemin"]).parts[-2:]): l for l in f["plan"] if l["type"] == "image"}
+        self.assertTrue(plan["LEMONADE/aespa - LEMONADE - LEMONADE-poster.jpg"]["source"].endswith("image_35.jpg"))
+        self.assertEqual(plan["LEMONADE/folder.jpg"]["url"], "http://i/c1.jpg")                       # la pochette de l'album reste celle du dossier
+        f, _ = travaux.enregistrer_choix(self.tid, {"poster": "pochette"})
+        self.assertEqual(f["clip"]["poster_choisi"], "pochette")
+        self.assertIsNone(travaux.enregistrer_choix(self.tid, {"poster": "inconnu"})[0])
+
+    def test_poster_et_folder_identiques_apres_rangement(self):
+        images_perso.configurer(self.tmp / "data")
+        travaux.ajouter_image(self.tid, "couverture", png_octets(900, 900), "pochette.png")
+        with mock.patch.object(rangement.requests, "get", return_value=mock.Mock(status_code=200, content=b"IMG")):
+            r = travaux.ranger(self.tid)
+        self.assertTrue(r["ok"], r)
+        album = self.racine / "aespa/LEMONADE"
+        self.assertEqual((album / "aespa - LEMONADE - LEMONADE-poster.jpg").read_bytes(), (album / "folder.jpg").read_bytes())          # la même image carrée
+        from PIL import Image
+        self.assertEqual(Image.open(album / "aespa - LEMONADE - LEMONADE-poster.jpg").size, (900, 900))
+
     def test_pochette_ajoutee_a_la_main_choisie_et_rangee(self):
         """Cas « Rich Man » : aucune pochette trouvée, l'utilisatrice envoie la sienne depuis son téléphone."""
         images_perso.configurer(self.tmp / "data")
@@ -440,6 +509,57 @@ class FicheTest(unittest.TestCase):
         self.assertNotEqual((dossier / "folder.jpg").read_bytes(), b"ANCIENNE")
         sauv = list((self.tmp / "data" / "sauvegardes").rglob("*folder.jpg"))
         self.assertEqual([x.read_bytes() for x in sauv], [b"ANCIENNE"])                          # l'ancienne est sauvegardée avant d'être remplacée
+
+    def test_clip_deja_range_mis_a_la_convention_avec_sauvegarde(self):
+        """Les clips rangés avant la convention (poster = image 16:9 du clip) : poster → pochette, ancien poster → vignette, ancien poster sauvegardé."""
+        album = self.racine / "aespa" / "LEMONADE"
+        album.mkdir(parents=True)
+        from PIL import Image
+        Image.new("RGB", (1280, 720), (10, 50, 90)).save(album / "aespa - LEMONADE - LEMONADE-poster.jpg")     # l'ancien poster, 16:9
+        Image.new("RGB", (1000, 1000), (200, 20, 20)).save(album / "folder.jpg")                                # la pochette de l'album
+        (album / "aespa - LEMONADE - LEMONADE.mkv").write_bytes(b"V")
+        c = travaux.TRAVAUX[self.tid]
+        c.update(etat="range", plan=[{"type": "video", "chemin": str(album / "aespa - LEMONADE - LEMONADE.mkv"), "existe": False}])
+        ancien = (album / "aespa - LEMONADE - LEMONADE-poster.jpg").read_bytes()
+        r = travaux.mettre_a_la_convention(self.tid)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(Image.open(album / "aespa - LEMONADE - LEMONADE-thumb.jpg").size, (1280, 720))                # l'ancienne image devient la vignette
+        self.assertEqual((album / "aespa - LEMONADE - LEMONADE-thumb.jpg").read_bytes(), ancien)
+        self.assertEqual((album / "aespa - LEMONADE - LEMONADE-poster.jpg").read_bytes(), (album / "folder.jpg").read_bytes())   # poster = pochette
+        sauv = list((self.tmp / "data" / "sauvegardes").rglob("*poster.jpg"))
+        self.assertEqual([x.read_bytes() for x in sauv], [ancien])                                                    # l'ancien poster est sauvegardé
+        self.emby._request.assert_called()                                                                            # Emby est prévenu
+        self.assertIn("Déjà à la convention", travaux.mettre_a_la_convention(self.tid)["message"])                  # sans effet la 2e fois
+
+    def test_mise_a_la_convention_de_tous_les_clips_ranges(self):
+        from PIL import Image
+        res = {}
+        for nom, carre in (("A", True), ("B", False)):
+            album = self.racine / "aespa" / nom
+            album.mkdir(parents=True)
+            Image.new("RGB", (1280, 720), (10, 50, 90)).save(album / f"aespa - {nom} - T-poster.jpg")
+            Image.new("RGB", (1000, 1000) if carre else (1280, 720), (200, 20, 20)).save(album / "folder.jpg")
+            (album / f"aespa - {nom} - T.mkv").write_bytes(b"V")
+            c = travaux.ajouter(self.ctx, {"titre": f"T{nom}", "album": nom, "video_id": "abcdefghijk"})
+            travaux.TRAVAUX[c["id"]].update(etat="range", plan=[{"type": "video", "chemin": str(album / f"aespa - {nom} - T.mkv"), "existe": False}])
+        travaux.TRAVAUX[self.tid]["etat"] = "pret"
+        r = travaux.mettre_tous_a_la_convention()
+        self.assertEqual((r["total"], r["faits"], r["deja"], [x[0] for x in r["refuses"]]), (2, 1, 0, ["TB"]))      # le clip dont la « pochette » n'est pas carrée n'est pas touché
+
+    def test_mise_a_la_convention_refusee_sans_pochette_carree_ou_clip_non_range(self):
+        album = self.racine / "aespa" / "LEMONADE"
+        album.mkdir(parents=True)
+        from PIL import Image
+        Image.new("RGB", (1280, 720), (10, 50, 90)).save(album / "aespa - LEMONADE - LEMONADE-poster.jpg")
+        Image.new("RGB", (1280, 720), (1, 2, 3)).save(album / "folder.jpg")                                         # pas carrée : on ne la prend pas pour une pochette
+        (album / "aespa - LEMONADE - LEMONADE.mkv").write_bytes(b"V")
+        c = travaux.TRAVAUX[self.tid]
+        self.assertFalse(travaux.mettre_a_la_convention(self.tid)["ok"])                                             # pas rangé
+        c.update(etat="range", plan=[{"type": "video", "chemin": str(album / "aespa - LEMONADE - LEMONADE.mkv"), "existe": False}])
+        r = travaux.mettre_a_la_convention(self.tid)
+        self.assertFalse(r["ok"])
+        self.assertIn("carrée", r["error"])
+        self.assertFalse((album / "aespa - LEMONADE - LEMONADE-thumb.jpg").exists())                                 # rien n'a été modifié
 
     def test_les_images_ajoutees_resservent_aux_autres_clips_de_l_artiste(self):
         images_perso.configurer(self.tmp / "data")

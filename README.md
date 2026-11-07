@@ -35,7 +35,7 @@ Tout se fait **à la demande** : aucune surveillance, aucun téléchargement tou
 3. **(Facultatif) Réduire la taille** : un clip 4K pèse 250 à 450 Mo. L'option « 📉 Réduire la taille » réencode l'image en VP9 (même format que tes clips actuels) pour environ **60 % de la taille (celle de l'AV1 de YouTube), avec une qualité égale** ; le son n'est pas touché. Environ 10 minutes par clip.
 4. **Régler le volume** : même niveau que les thèmes de MouFlopening (ReplayGain, 89 dB), réglé **sans perte** avec [AACGain](https://github.com/dgilman/aacgain) quand le son est en AAC (paliers de 1,5 dB, aucun réencodage). Sinon le son est refait en AAC.
 5. **La fiche** : avant de ranger, une fiche montre tout ce qui sera visible dans Emby : affiche, logo, bannière, fonds d'écran, pochette et cdart de l'album, biographie (modifiable), infos du clip, `.nfo`. Quand plusieurs images existent (fanart.tv, TheAudioDB, images prises dans la vidéo), **tu choisis**.
-6. **Ranger** : sur confirmation, clip par clip. Les dossiers, le clip, son `.nfo` (`<musicvideo>`), son poster et les images du groupe sont créés, puis Emby relit le dossier.
+6. **Ranger** : sur confirmation, clip par clip. Les dossiers, le clip, son `.nfo` (`<musicvideo>`), son poster (la **pochette de l'album**, comme dans le reste de la médiathèque), sa vignette `-thumb.jpg` (l'image paysage du clip) et les images du groupe sont créés, puis Emby relit le dossier.
 
 ### 🛡️ Les garde-fous
 - **Rien n'est remplacé** : un fichier déjà présent est gardé. Seule exception : une image que tu choisis explicitement de remplacer ; l'ancienne est alors copiée dans `data/sauvegardes/` et la nouvelle doit être entièrement récupérée avant qu'on touche à l'ancienne.
