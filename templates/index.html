@@ -159,6 +159,7 @@
     .note { padding:8px 12px; border-radius:6px; margin-top:8px; font-size:.88rem; background:var(--field); }
     .note.err { background:rgba(220,80,80,.18); } .note.warn { background:rgba(230,170,50,.18); }
     @media (max-width:600px) { body { padding:10px; } .search-row { flex-direction:column; } .search-row .btn { padding:12px; } input[type=text], select { font-size:16px; } .toolbar .btn { flex:1 1 45%; padding:11px; } }
+.fi-edit{width:100%;box-sizing:border-box;font-size:16px;padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#eee}
 </style>
 </head>
 <body>
@@ -355,7 +356,7 @@ function majCoches() {                                                  // « 3 
     $('telecharger').disabled = !n;
 }
 function ligne(c, i) {
-    return `<div class="clip" data-t="${esc(c.titre)}" data-album="${esc(c.album || '')}" data-annee="${esc(c.annee || '')}"><input type="checkbox" ${c.deja ? '' : 'checked'} aria-label="Choisir ce clip">
+    return `<div class="clip" data-t="${esc(c.titre)}" data-album="${esc(c.album || '')}" data-annee="${esc(c.annee || '')}"><input type="checkbox" aria-label="Choisir ce clip">
         <div><span class="t">${esc(c.titre)}</span> <span class="muted">${esc(c.album)}${c.annee ? ' · ' + esc(c.annee) : ''}</span>
         ${c.deja ? '<span class="pill ok">✅ déjà dans la médiathèque</span>' : '<span class="pill">⬇️ à prendre</span>'}
         ${c.source === 'video' ? '<span class="pill" title="MusicBrainz connaît une vidéo pour ce titre">🎞️ vidéo connue</span>' : c.source === 'youtube' ? '<span class="pill" title="Trouvé sur YouTube et reconnu comme un morceau de l’album">▶️ trouvé sur YouTube</span>' : c.source === 'ajout' ? '<span class="pill ok" title="Ajouté à la main">➕ ajouté par toi</span>' : '<span class="pill warn" title="Single ou titre-phare : la vidéo officielle est à vérifier sur YouTube">à vérifier sur YouTube</span>'}</div>
@@ -640,8 +641,10 @@ function rendreFiche() {
     <div class="fi-corps">
       <section class="fi"><h3>🎬 Le clip</h3>
         <dl class="fi-infos">
-            <dt>Titre</dt><dd>${esc(c.titre)}</dd><dt>Groupe</dt><dd>${esc(c.groupe)}</dd><dt>Album</dt><dd>${esc(c.album)}${c.dossier_album_existe ? ' <span class="pill ok">dossier existant</span>' : ' <span class="pill">nouveau dossier</span>'}</dd>
-            <dt>Année</dt><dd>${esc(c.annee || '—')}</dd><dt>Durée</dt><dd>${dureeMin(c.duree)}</dd>
+            <dt>Titre</dt><dd><input class="fi-edit" id="edTitre" maxlength="160" value="${esc(c.titre)}"></dd><dt>Groupe</dt><dd>${esc(c.groupe)}</dd>
+            <dt>Album</dt><dd><input class="fi-edit" id="edAlbum" maxlength="160" value="${esc(c.album)}">${c.dossier_album_existe ? ' <span class="pill ok">dossier existant</span>' : ' <span class="pill">nouveau dossier</span>'}</dd>
+            <dt>Année</dt><dd><input class="fi-edit" id="edAnnee" maxlength="4" inputmode="numeric" placeholder="aaaa" value="${esc(c.annee || '')}" style="max-width:6em"></dd>
+            <dt></dt><dd><button class="btn small" id="edOk">💾 Enregistrer ces corrections</button> <span class="muted">Le dossier, le nom du fichier, le .nfo et la pochette suivent l'album.</span></dd><dt>Durée</dt><dd>${dureeMin(c.duree)}</dd>
             <dt>Image</dt><dd>${esc(v.resolution || '')} ${esc(v.codec || '')} · ${v.fps ? Math.round(v.fps) + ' i/s · ' : ''}${v.debit ? Math.round(v.debit / 1000) + ' kb/s' : ''}</dd>
             <dt>Son</dt><dd>${esc(a.codec || '')} ${a.debit ? Math.round(a.debit / 1000) + ' kb/s' : ''} · volume ${vol.avant != null ? vol.avant + ' → ' + vol.apres + ' dB' : ''}<br><span class="muted">${esc(vol.methode || '')}</span></dd>
             <dt>Taille</dt><dd>${taille(c.taille)}${c.reduction && c.reduction.fait ? ` <span class="pill ok">réduite : ${taille(c.reduction.avant)} → ${taille(c.reduction.apres)} (${Math.round(100 * c.reduction.apres / c.reduction.avant)} %)</span>` : (c.reduction && c.reduction.raison ? ` <span class="pill">non réduite : ${esc(c.reduction.raison)}</span>` : '')}</dd><dt>Source</dt><dd>${esc(c.chaine || '')} · « ${esc(c.titre_youtube || '')} »</dd>
@@ -701,6 +704,7 @@ function rendreFiche() {
         if (i >= 0) liste.splice(i, 1); else if (liste.length < g.fanart.libres) liste.push(u); else return note('Toutes les places libres sont prises : décoche un fond d’abord.', 'warn');
         choixFiche({images: {fanart: liste}});
     });
+    $('edOk').onclick = () => choixFiche({edition: {titre: $('edTitre').value, album: $('edAlbum').value, annee: $('edAnnee').value}});
     const bio = $('ficheBio'); if (bio) bio.onchange = () => choixFiche({biographie: bio.value === g.biographie_defaut ? null : bio.value}, true);
     $('ficheBioReset').onclick = () => choixFiche({biographie: null});
     corps.querySelectorAll('[data-artiste]').forEach(b => b.onclick = () => choixFiche({artiste: b.dataset.artiste || null}));

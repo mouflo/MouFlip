@@ -363,8 +363,11 @@ def _resoudre_rg(ctx: dict, titre: str, album: str) -> str:
     except Exception:
         return ""
     images = ctx.get("images_album") or {}
-    memes = [c["rg"] for c in clips if c.get("rg") and c["titre"] == titre]
+    memes = [c["rg"] for c in clips if c.get("rg") and c["titre"] == titre and noms.normaliser(c["album"]) == noms.normaliser(album)]
     memes += [c["rg"] for c in clips if c.get("rg") and noms.normaliser(c["album"]) == noms.normaliser(album) and c["rg"] not in memes]
+    base = _lire_json(CACHE_DIR / "groupes" / f"{ctx.get('mbid', '')}.json") or {}                # un album corrigé à la main : retrouvé par son titre dans les sorties du groupe
+    memes += sorted([g["id"] for g in base.get("rgs") or [] if noms.normaliser(g["titre"]) == noms.normaliser(album) and g["id"] not in memes],
+                    key=lambda i: next((0 if g["type"] in ("EP", "Album") else 1 for g in base.get("rgs") or [] if g["id"] == i), 1))
     return next((rg for rg in memes if images.get(rg)), memes[0] if memes else "")
 
 

@@ -621,6 +621,37 @@ class FicheTest(unittest.TestCase):
         finally:
             travaux.couvertures_fn = None
 
+    def test_titre_album_annee_modifiables_avant_le_rangement(self):
+        """Cas Awich : l'album était mal identifié (« Golden Kamuy » au lieu de « Golden Horizon »)."""
+        travaux.rg_fn = lambda ctx, titre, album: "rg_horizon" if album == "Golden Horizon" else ""
+        try:
+            f, err = travaux.enregistrer_choix(self.tid, {"edition": {"titre": "Golden Horizon", "album": "Golden Horizon", "annee": "2024"}})
+        finally:
+            travaux.rg_fn = None
+        self.assertEqual(err, "")
+        c = travaux.TRAVAUX[self.tid]
+        self.assertEqual((c["titre"], c["album"], c["annee"], c["rg"]), ("Golden Horizon", "Golden Horizon", "2024", "rg_horizon"))
+        chemins = [l["chemin"] for l in f["plan"]]
+        self.assertTrue(any(x.endswith("/aespa/Golden Horizon/aespa - Golden Horizon - Golden Horizon.mkv") for x in chemins))      # le dossier et le nom suivent
+        self.assertFalse(any("/LEMONADE/" in x for x in chemins))
+        self.assertIn("<album>Golden Horizon</album>", f["clip"]["nfo"])
+        self.assertIn("<year>2024</year>", f["clip"]["nfo"])
+        self.assertEqual(f["clip"]["album"], "Golden Horizon")
+
+    def test_edition_vide_ou_invalide_refusee_sans_rien_changer(self):
+        avant = (travaux.TRAVAUX[self.tid]["titre"], travaux.TRAVAUX[self.tid]["album"], travaux.TRAVAUX[self.tid]["annee"])
+        for ed in ({"titre": "  "}, {"album": ""}, {"annee": "20x4"}, {"titre": "a\nb"}, {"album": "x" * 200}):
+            self.assertIsNone(travaux.enregistrer_choix(self.tid, {"edition": ed})[0], ed)
+        self.assertEqual((travaux.TRAVAUX[self.tid]["titre"], travaux.TRAVAUX[self.tid]["album"], travaux.TRAVAUX[self.tid]["annee"]), avant)
+        f, err = travaux.enregistrer_choix(self.tid, {"edition": {"annee": ""}})                     # une année vide est permise
+        self.assertEqual(err, "")
+
+    def test_changer_d_album_repart_des_propositions_de_pochette(self):
+        travaux.enregistrer_choix(self.tid, {"album": {"couverture": ""}})                          # « aucune pochette » choisi pour l'ancien album
+        f, err = travaux.enregistrer_choix(self.tid, {"edition": {"album": "Autre album"}})
+        self.assertEqual(err, "")
+        self.assertEqual(travaux.TRAVAUX[self.tid]["choix"]["album"], {"couverture": None, "cdart": None})
+
     def test_fiche_d_un_clip_pas_pret(self):
         c = travaux.ajouter(self.ctx, {"titre": "Autre", "album": "Autre", "video_id": "abcdefghijk"})
         self.assertIsNone(travaux.fiche(c["id"]))

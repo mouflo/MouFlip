@@ -2,6 +2,7 @@
 
 ## [0.1] - 2026-11-07
 Première version de MouFlip (clips vidéo K-pop pour Emby).
+- ✏️ **Fiche modifiable avant le rangement** : titre, album et année se corrigent dans la fiche (dossier, nom du fichier, .nfo et pochette suivent). Les cases des clips sont **décochées par défaut**.
 - 🔎 **Recherche d'un groupe** (MusicBrainz) : fiche, albums, liste de ses clips officiels (sans remix, versions, chorégraphies, concerts ni coulisses). La liste trouvée est **enregistrée** sur le serveur et réutilisée ; « 🔄 Actualiser la liste » la redemande. Si MusicBrainz est en panne, la liste enregistrée sert quand même.
 - ✅ **Clips déjà présents** repérés dans « Video clip/<Groupe>/ » (noms écrits autrement, doubles espaces, `.nfo`), chemin de rangement prévu affiché. Rien n'est écrit tant que tu ne ranges pas.
 - 👁️ **Voir le clip** avant de choisir : lecteur YouTube intégré, vidéos possibles (chaînes officielles seulement quand il y en a), format et taille de chaque version, **toutes les qualités** d'une vidéo (1080p, 1440p, 4K × h264/vp9/av1) au choix.

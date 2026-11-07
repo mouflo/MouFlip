@@ -565,6 +565,24 @@ def enregistrer_choix(tid, donnees: dict):
         if nom is not None and (not isinstance(nom, str) or not nom.strip() or len(nom) > 120 or "\n" in nom):
             return None, "Nom d'artiste invalide."
         choix["artiste"] = nom.strip() if nom else None
+    if "edition" in donnees:                                                        # titre, album, année corrigés dans la fiche avant le rangement
+        ed = donnees["edition"] or {}
+        titre = str(ed.get("titre", c["titre"])).strip()
+        album = str(ed.get("album", c["album"])).strip()
+        annee = str(ed.get("annee", c["annee"])).strip()
+        if not titre or not album or len(titre) > 160 or len(album) > 160 or any(x in titre + album for x in "\n\r\t"):
+            return None, "Le titre et l'album doivent être renseignés (160 caractères au plus, sur une ligne)."
+        if annee and not (len(annee) == 4 and annee.isdigit()):
+            return None, "L'année s'écrit avec 4 chiffres (ou reste vide)."
+        if album != c["album"]:                                                      # un autre album : sa pochette, son dossier, son groupe de sorties changent
+            c["album"], c["rg"] = album, ""
+            choix["album"] = {"couverture": None, "cdart": None}
+            if rg_fn:
+                try:
+                    c["rg"] = rg_fn(c["contexte"], titre, album) or ""
+                except Exception:
+                    c["rg"] = ""
+        c["titre"], c["annee"] = titre, annee
     if "vignette_clip" in donnees:
         if donnees["vignette_clip"] is not None and donnees["vignette_clip"] not in {p["id"] for p in c.get("posters") or []}:
             return None, "Vignette inconnue."
