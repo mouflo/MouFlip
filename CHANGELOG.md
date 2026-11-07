@@ -11,4 +11,5 @@ Première version de MouFlip (clips vidéo K-pop pour Emby).
 - 🔗 **Artiste reconnu dans Emby** : Emby relie un clip à l'artiste par son nom ; la fiche vérifie l'écriture et propose celle d'Emby.
 - 📁 **Rangement sur confirmation**, clip par clip : copie vérifiée, `.nfo` au format de tes clips (`<musicvideo>`, `artist.nfo`), poster, images du groupe ; **jamais de remplacement** d'un fichier existant, sauf une image que tu choisis de remplacer (l'ancienne est sauvegardée). Emby est prévenu.
 - ⚙️ **Réglages** : Emby, dossier des clips, volume, clés fanart.tv / TheAudioDB / IMVDb, cookies YouTube (jamais renvoyés ni écrits dans le Journal). 🩺 Journal intégré. yt-dlp se met à jour tout seul chaque jour.
+- 💿 **Pochette d'album retrouvée** : un clip dont l'album n'était pas identifié, ou dont l'album n'a pas de pochette sous le single (« LEMONADE » single / album), est relié à l'album qui en a une. Les choix d'images d'album (pochette, cdart) sont propres à chaque album et ne sont plus retenus pour tout le groupe.
 - ⬇️ **Barre des téléchargements** toujours visible en bas de l'écran (dépliable), la page reste défilable.
