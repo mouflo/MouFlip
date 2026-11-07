@@ -21,15 +21,15 @@ _VERROU = threading.RLock()
 TRAVAUX: dict[str, dict] = {}
 _FILE: "queue.Queue[str]" = queue.Queue()
 _CFG = {"dossier": None, "cible_db": audio.REFERENCE_DB, "debit": "192k", "racine": None, "emby": None}
-ETATS_ACTIFS = ("attente", "telechargement", "audio")
+ETATS_ACTIFS = ("attente", "telechargement", "reduction", "audio")
 SLOTS_FANART = ("fanart", "fanart2", "fanart3", "fanart4")          # fanart.jpg puis extrafanart/fanart1..3.jpg (voir rangement.IMAGES_GROUPE)
 TYPES_IMAGES = ("vignette", "banniere", "logo")
 NOMS_FICHIERS = dict(rangement.IMAGES_GROUPE)
 
 
-def configurer(dossier_donnees, racine_fn, cible_fn, debit_fn, emby, sans_perte_fn=lambda: True):
+def configurer(dossier_donnees, racine_fn, cible_fn, debit_fn, emby, sans_perte_fn=lambda: True, reduction_fn=lambda: {"actif": False, "crf": 30}):
     """racine_fn() = dossier « Video clip » ; cible_fn() = niveau en dB ; debit_fn() = débit AAC ; emby = client Emby."""
-    _CFG.update(dossier=Path(dossier_donnees) / "travail", racine=racine_fn, cible=cible_fn, debit=debit_fn, emby=emby, sans_perte=sans_perte_fn)
+    _CFG.update(dossier=Path(dossier_donnees) / "travail", racine=racine_fn, cible=cible_fn, debit=debit_fn, emby=emby, sans_perte=sans_perte_fn, reduction=reduction_fn)
     _CFG["dossier"].mkdir(parents=True, exist_ok=True)
     _charger()
 
@@ -230,8 +230,22 @@ def _preparer(c):
         c["video_id"] = _choisir_video(c)
         _maj(c, message="Téléchargement…")
         t = telechargement.telecharger(c["video_id"], dossier, _progression(c), format_id=c.get("format_id", ""))
-        _maj(c, etat="audio", progres=100, message="Mesure et réglage du volume…")
         source = Path(t["fichier"])
+        reduction = {}
+        red = _CFG["reduction"]()
+        if red.get("actif"):
+            _maj(c, etat="reduction", progres=0, message="Réduction de la taille du clip (environ 10 minutes)…")
+            def avance(pct):
+                c["progres"], c["message"] = pct, f"Réduction de la taille du clip… {pct} % (environ 10 minutes)"
+            reduit = dossier / "reduit.mkv"
+            reduction = telechargement.reduire(source, reduit, int(red.get("crf", 30)), avance)
+            if reduction["fait"]:
+                try:
+                    source.unlink()
+                except OSError:
+                    pass
+                source = reduit
+        _maj(c, etat="audio", progres=100, message="Mesure et réglage du volume…")
         fini = dossier / "clip.mkv"
         a = audio.normaliser(source, fini, float(_CFG["cible"]()), _CFG["debit"](), bool(_CFG["sans_perte"]()))
         poster = telechargement.vignette_en_jpg(t["vignette"], str(fini), dossier / "poster.jpg")
@@ -242,10 +256,12 @@ def _preparer(c):
             source.unlink()
         except OSError:
             pass
-        _maj(c, fichier=str(fini), poster=poster, posters=posters, sonde=sonde, audio=a, titre_youtube=t["titre"], chaine=t["chaine"])
+        _maj(c, fichier=str(fini), poster=poster, posters=posters, sonde=sonde, reduction=reduction, audio=a, titre_youtube=t["titre"], chaine=t["chaine"])
         c["plan"] = [{k: v for k, v in l.items() if k not in ("contenu",)} for l in construire_plan(c)]
         v = sonde["video"]
-        msg = f"Prêt à ranger : {v['hauteur']}p {v['codec']}, volume {a['avant']} → {a['apres']} dB ({a.get('methode', '')})" + (", limiteur actif" if a["limiteur"] else "") + "."
+        taille_txt = (f" (taille {reduction['avant'] / 1e6:.0f} → {reduction['apres'] / 1e6:.0f} Mo)" if reduction.get("fait") else
+                      (f" (taille non réduite : {reduction['raison']})" if reduction else ""))
+        msg = f"Prêt à ranger : {v['hauteur']}p {v['codec']}{taille_txt}, volume {a['avant']} → {a['apres']} dB ({a.get('methode', '')})" + (", limiteur actif" if a["limiteur"] else "") + "."
         _maj(c, etat="pret", progres=100, message=msg)
         logger.info("[Travaux] %s - %s : %s", c["groupe"], c["titre"], msg)
     except (telechargement.TelechargementError, audio.AudioError) as e:
@@ -366,7 +382,7 @@ def fiche(tid) -> dict | None:
                  "video": {"resolution": f"{v.get('hauteur')}p" if v.get("hauteur") else "", "largeur": v.get("largeur"), "hauteur": v.get("hauteur"),
                            "codec": v.get("codec"), "debit": v.get("debit"), "fps": v.get("fps")},
                  "audio": {"codec": a.get("codec"), "debit": a.get("debit"), "canaux": a.get("canaux")},
-                 "volume": c.get("audio") or {}, "destination": nom_video, "nfo": _nfo_clip(c),
+                 "volume": c.get("audio") or {}, "reduction": c.get("reduction") or {}, "destination": nom_video, "nfo": _nfo_clip(c),
                  "posters": [{"id": p["id"], "label": p["label"]} for p in (c.get("posters") or [])],
                  "poster_choisi": choix.get("poster") or ((c.get("posters") or [{}])[0].get("id") if c.get("posters") else None),
                  "dossier_album_existe": dossier_album.exists()},

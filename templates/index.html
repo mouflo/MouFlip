@@ -407,7 +407,7 @@ async function suivreTravaux() {
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
     document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
     document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
-    if (liste.some(t => ['attente', 'telechargement', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
+    if (liste.some(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
 }
 
 // ============================ la fiche : tout ce qui sera visible dans Emby ============================
@@ -476,7 +476,7 @@ function rendreFiche() {
             <dt>Année</dt><dd>${esc(c.annee || '—')}</dd><dt>Durée</dt><dd>${dureeMin(c.duree)}</dd>
             <dt>Image</dt><dd>${esc(v.resolution || '')} ${esc(v.codec || '')} · ${v.fps ? Math.round(v.fps) + ' i/s · ' : ''}${v.debit ? Math.round(v.debit / 1000) + ' kb/s' : ''}</dd>
             <dt>Son</dt><dd>${esc(a.codec || '')} ${a.debit ? Math.round(a.debit / 1000) + ' kb/s' : ''} · volume ${vol.avant != null ? vol.avant + ' → ' + vol.apres + ' dB' : ''}<br><span class="muted">${esc(vol.methode || '')}</span></dd>
-            <dt>Taille</dt><dd>${taille(c.taille)}</dd><dt>Source</dt><dd>${esc(c.chaine || '')} · « ${esc(c.titre_youtube || '')} »</dd>
+            <dt>Taille</dt><dd>${taille(c.taille)}${c.reduction && c.reduction.fait ? ` <span class="pill ok">réduite : ${taille(c.reduction.avant)} → ${taille(c.reduction.apres)} (${Math.round(100 * c.reduction.apres / c.reduction.avant)} %)</span>` : (c.reduction && c.reduction.raison ? ` <span class="pill">non réduite : ${esc(c.reduction.raison)}</span>` : '')}</dd><dt>Source</dt><dd>${esc(c.chaine || '')} · « ${esc(c.titre_youtube || '')} »</dd>
             <dt>Fichier</dt><dd>${esc(c.destination)}</dd>
         </dl>
         <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera sur la vignette du clip dans Emby (« …-poster.jpg »).</div>
@@ -548,7 +548,7 @@ $('ficheRanger').onclick = async () => { if (!FI) return; const id = FI.id, nom 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('fiche').classList.contains('ouvert')) fermerFiche(); });
 
 function resumeTravaux(liste) {
-    const actifs = liste.filter(t => ['attente', 'telechargement', 'audio'].includes(t.etat)), prets = liste.filter(t => t.etat === 'pret'),
+    const actifs = liste.filter(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat)), prets = liste.filter(t => t.etat === 'pret'),
           erreurs = liste.filter(t => t.etat === 'erreur'), ranges = liste.filter(t => t.etat === 'range');
     const enCours = actifs.find(t => t.etat !== 'attente') || actifs[0];
     const morceaux = [];
@@ -572,8 +572,8 @@ $('travauxEntete').addEventListener('keydown', e => { if (e.key === 'Enter' || e
 try { if (localStorage.getItem('mouflipTravauxOuvert') === '1') $('travaux').classList.add('ouvert'); } catch (e) {}
 window.addEventListener('resize', ajusterBas);
 function carteTravail(t) {
-    const actif = ['attente', 'telechargement', 'audio'].includes(t.etat);
-    const pill = {attente: '<span class="pill">en attente</span>', telechargement: '<span class="pill warn">téléchargement</span>', audio: '<span class="pill warn">volume</span>',
+    const actif = ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat);
+    const pill = {attente: '<span class="pill">en attente</span>', telechargement: '<span class="pill warn">téléchargement</span>', reduction: '<span class="pill warn">réduction de la taille</span>', audio: '<span class="pill warn">volume</span>',
                   pret: '<span class="pill ok">prêt à ranger</span>', range: '<span class="pill ok">✅ rangé</span>', erreur: '<span class="pill err">erreur</span>'}[t.etat] || '';
     return `<div class="job"><div class="titre">${esc(t.groupe)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> ${pill}${t.qualite ? ' <span class="pill">' + esc(t.qualite) + '</span>' : ''}</div>
         ${actif ? `<div class="barre"><i style="width:${t.progres || 0}%"></i></div>` : ''}

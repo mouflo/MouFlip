@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import audio, emby_artistes, existants, formats, noms, sources, travaux, ytcookies
+from src import audio, emby_artistes, existants, formats, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -68,6 +68,10 @@ FORMATS = {}                       # jobs de lecture des formats : id -> {"total
 _FORMATS_VERROU = threading.Lock()
 _CACHE_GROUPES = {}                # (ancien cache en mémoire : remplacé par l'enregistrement sur disque ; gardé vide pour les réglages)
 OUTILS_ETAT = {}
+
+
+REDUCTION = {"actif": bool(((CONFIG.get("clips") or {}).get("reduction") or {}).get("actif", False)),
+             "crf": int(((CONFIG.get("clips") or {}).get("reduction") or {}).get("crf", 30))}
 
 
 def _roots():
@@ -550,6 +554,34 @@ _route_cle("theaudiodb", "THEAUDIODB_KEY", _tester_audiodb)
 _route_cle("imvdb", "IMVDB_API_KEY", _tester_imvdb)
 
 
+@app.route("/api/settings/reduction", methods=["GET", "POST"])
+def api_reduction():
+    """Réduire la taille des clips : l'image est réencodée en VP9 (qualité constante, 8 images/s environ), le son est recopié. Désactivé par défaut."""
+    if request.method == "GET":
+        return jsonify({**REDUCTION, "choix": telechargement.CRF_REDUCTION})
+    b = request.get_json(silent=True) or {}
+    try:
+        crf = int(b.get("crf", REDUCTION["crf"]))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Choisis un niveau de qualité."}), 400
+    if not 20 <= crf <= 45:
+        return jsonify({"ok": False, "error": "Le niveau doit être entre 20 (très fidèle, gros fichier) et 45 (petit fichier)."}), 400
+    actif = bool(b.get("actif"))
+    import json
+    chemin = BASE_DIR / "config.json"
+    try:
+        cfg = json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else {}
+    except ValueError:
+        return jsonify({"ok": False, "error": "config.json est illisible : rien n'a été modifié."}), 500
+    cfg.setdefault("clips", {})["reduction"] = {"actif": actif, "crf": crf}
+    tmp = chemin.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, chemin)
+    REDUCTION.update(actif=actif, crf=crf)
+    return jsonify({"ok": True, "message": ("Enregistré : les prochains clips auront leur taille réduite (environ 10 minutes de plus par clip)." if actif
+                                              else "Enregistré : la taille des clips n'est pas réduite (le fichier de YouTube est gardé tel quel).")})
+
+
 @app.route("/api/settings/audio", methods=["GET", "POST"])
 def api_audio():
     """Volume des clips (même réglage que les thèmes de MouFlopening : 89 dB) et débit AAC de la piste refaite."""
@@ -754,7 +786,7 @@ redemarrage.init_app(app, BASE_DIR)
 import redemarrer
 redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe())
 travaux.emby_artiste_fn = lambda nom: emby_artistes.chercher(EMBY, nom)
-travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"])
+travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"], lambda: REDUCTION)
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")
 
 def _mise_a_jour_ytdlp(premiere_attente=120, toutes=24 * 3600):

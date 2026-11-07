@@ -403,6 +403,17 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(self.c.post("/api/ajout/confirmer", json={"mbid": self.MB, "titre": "X", "album": "x", "video_id": "court"}).status_code, 400)
         self.assertEqual(self.c.post("/api/ajout/confirmer", json={"mbid": self.MB, "titre": "X", "album": "x", "annee": "20x", "video_id": "9JFi7MmjtGA"}).status_code, 400)
 
+    def test_reglage_reduire_la_taille(self):
+        with mock.patch.object(self.A.os, "replace"), mock.patch.object(Path, "write_text"):
+            r = self.c.post("/api/settings/reduction", json={"actif": True, "crf": 30}).get_json()
+        self.assertTrue(r["ok"])
+        self.assertEqual((self.A.REDUCTION["actif"], self.A.REDUCTION["crf"]), (True, 30))
+        self.assertEqual(self.c.post("/api/settings/reduction", json={"actif": True, "crf": 5}).status_code, 400)     # niveau absurde refusé
+        self.assertEqual(self.c.post("/api/settings/reduction", json={"actif": True, "crf": "x"}).status_code, 400)
+        g = self.c.get("/api/settings/reduction").get_json()
+        self.assertEqual(g["choix"]["leger"], 30)
+        self.A.REDUCTION.update(actif=False, crf=30)                                    # remis comme avant pour les autres tests
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)

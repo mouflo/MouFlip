@@ -133,3 +133,62 @@ def images_extraites(fichier_video, dossier, combien: int = 4) -> list[dict]:
         except (OSError, subprocess.SubprocessError):
             continue
     return sortie
+
+
+# ----------------------------------------------------------------------------------------------------------------------------------------
+# Réduire la taille : l'image est réencodée en VP9 (le codec de tes clips actuels) à qualité constante ; le son est recopié tel quel.
+# Mesuré sur LEMONADE (3 passages de 20 s, SSIM image par image) : crf 30 = 50 à 53 % de la taille d'origine, qualité égale à l'AV1 de YouTube
+# (SSIM 0,988-0,993) ; crf 27 = 61 % (SSIM 0,994) ; crf 34 = 41 % ; crf 38 = 32 %. Environ 8 images/s sur 8 cœurs : ~10 min pour un clip 4K de 3 min.
+# ----------------------------------------------------------------------------------------------------------------------------------------
+CRF_REDUCTION = {"leger": 30, "tres_peu_de_perte": 27, "plus_petit": 36}
+MEMOIRE_MIN_GO = 2.5
+
+
+def memoire_disponible_go() -> float:
+    try:
+        for ligne in open("/proc/meminfo"):
+            if ligne.startswith("MemAvailable:"):
+                return int(ligne.split()[1]) / 1e6
+    except (OSError, ValueError):
+        pass
+    return 99.0
+
+
+def reduire(source, dst, crf: int = 30, progression=None) -> dict:
+    """Écrit dst (mkv) = image de `source` réencodée en VP9 (crf donné) + son recopié. Retourne {fait, raison, avant, apres, crf}.
+    Ne réencode PAS : un clip déjà en AV1 (déjà compact), un manque de mémoire, un résultat qui n'est pas au moins 10 % plus petit (dst n'est alors pas
+    créé et `source` reste le fichier à utiliser). Lève TelechargementError si ffmpeg échoue. `progression(pourcent)` est appelé pendant le travail."""
+    source, dst = Path(source), Path(dst)
+    avant = source.stat().st_size
+    info = sonder(source)
+    codec = (info["video"].get("codec") or "").lower()
+    if codec == "av1":
+        return {"fait": False, "raison": "déjà en AV1 (déjà compact)", "avant": avant, "apres": avant, "crf": crf}
+    if memoire_disponible_go() < MEMOIRE_MIN_GO:
+        return {"fait": False, "raison": f"pas assez de mémoire libre ({memoire_disponible_go():.1f} Go, il en faut {MEMOIRE_MIN_GO})", "avant": avant, "apres": avant, "crf": crf}
+    duree = float(info.get("duree") or 0)
+    cmd = ["nice", "-n", "10", "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
+           "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", str(int(crf)), "-row-mt", "1", "-cpu-used", "3", "-threads", "8", "-tile-columns", "2", "-g", "240",
+           "-pix_fmt", "yuv420p", "-c:a", "copy", str(dst)]
+    try:
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
+            for ligne in proc.stdout:
+                if progression and duree and ligne.startswith("out_time_us="):
+                    try:
+                        progression(min(99, int(100 * int(ligne.split("=")[1]) / 1e6 / duree)))
+                    except ValueError:
+                        pass
+            erreur = proc.stderr.read() or ""
+            proc.wait(timeout=3600)
+        if proc.returncode != 0:
+            raise TelechargementError("ffmpeg a échoué : " + erreur[-300:].replace("\n", " "))
+    except (OSError, subprocess.SubprocessError) as e:
+        raise TelechargementError(f"réduction de la taille impossible : {e}")
+    apres = dst.stat().st_size if dst.exists() else avant
+    if apres > avant * 0.9:
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        return {"fait": False, "raison": f"gain trop faible ({apres / avant:.0%} de l'original) : fichier d'origine gardé", "avant": avant, "apres": avant, "crf": crf}
+    return {"fait": True, "raison": "", "avant": avant, "apres": apres, "crf": crf}

@@ -580,5 +580,86 @@ class ArtisteEmbyTest(unittest.TestCase):
             t.tearDown()
 
 
+class ReductionTest(unittest.TestCase):
+    """Réduire la taille : l'image est réencodée en VP9, le son est recopié ; jamais un fichier plus gros, jamais d'AV1 réencodé."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _source(self, nom="s.mkv", codec="libx264", args=()):
+        f = self.tmp / nom
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=duration=3:size=640x360:rate=24", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=3:sample_rate=48000", "-c:v", codec, *args, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-shortest", str(f)],
+                       check=True, capture_output=True)
+        return f
+
+    def test_image_en_vp9_plus_petite_son_recopie(self):
+        src = self._source(args=("-crf", "10"))                                  # source volontairement gourmande
+        pourcents = []
+        r = telechargement.reduire(src, self.tmp / "r.mkv", 30, pourcents.append)
+        self.assertTrue(r["fait"], r)
+        self.assertLess(r["apres"], r["avant"] * 0.9)
+        s = telechargement.sonder(self.tmp / "r.mkv")
+        self.assertEqual((s["video"]["codec"], s["audio"]["codec"]), ("vp9", "aac"))          # image refaite en VP9, son recopié
+        self.assertEqual((s["video"]["largeur"], s["video"]["hauteur"]), (640, 360))
+        self.assertTrue(pourcents and max(pourcents) <= 99)                      # l'avancement est signalé
+        self.assertEqual(audio.codec_audio(src), audio.codec_audio(self.tmp / "r.mkv"))
+        self.assertTrue(src.exists())                                            # l'original n'est pas touché
+
+    def test_son_identique_paquet_par_paquet(self):
+        src = self._source(args=("-crf", "10"))
+        telechargement.reduire(src, self.tmp / "r.mkv", 30)
+        def paquets(p):
+            return subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=size", "-of", "csv=p=0", str(p)], capture_output=True, text=True).stdout
+        self.assertEqual(paquets(src), paquets(self.tmp / "r.mkv"))              # aucun réencodage du son
+
+    def test_gain_trop_faible_le_fichier_d_origine_est_garde(self):
+        src = self._source("p.mkv", "libx264", ("-crf", "45"))                  # déjà très compressé : le VP9 ne gagnera pas 10 %
+        r = telechargement.reduire(src, self.tmp / "r.mkv", 20)
+        if not r["fait"]:
+            self.assertFalse((self.tmp / "r.mkv").exists())                      # pas de fichier plus gros laissé derrière
+            self.assertIn("gain trop faible", r["raison"])
+
+    def test_av1_n_est_pas_reencode(self):
+        src = self._source("a.mkv", "libsvtav1", ("-crf", "40"))
+        r = telechargement.reduire(src, self.tmp / "r.mkv", 30)
+        self.assertEqual((r["fait"], r["raison"]), (False, "déjà en AV1 (déjà compact)"))
+        self.assertFalse((self.tmp / "r.mkv").exists())
+
+    def test_pas_assez_de_memoire_pas_de_reencodage(self):
+        src = self._source(args=("-crf", "10"))
+        with mock.patch.object(telechargement, "memoire_disponible_go", return_value=1.0):
+            r = telechargement.reduire(src, self.tmp / "r.mkv", 30)
+        self.assertFalse(r["fait"])
+        self.assertIn("mémoire", r["raison"])
+
+    def test_dans_la_file_de_travaux_reduction_puis_volume(self):
+        travaux.TRAVAUX.clear()
+        racine = self.tmp / "Video clip"
+        racine.mkdir()
+        travaux.configurer(self.tmp / "data", lambda: str(racine), lambda: 89.0, lambda: "192k", mock.Mock(configured=True), lambda: True, lambda: {"actif": True, "crf": 30})
+        src_gros = self._source("gros.mkv", args=("-crf", "10"))
+        def faux_telechargement(video_id, dossier, progression=None, ydl_cls=None, format_id=""):
+            d = Path(dossier)
+            d.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src_gros, d / "source.mkv")
+            return {"fichier": str(d / "source.mkv"), "vignette": "", "titre": "t", "chaine": "c", "duree": 3}
+        ctx = {"nom": "aespa", "mbid": "b51c672b-0000-0000-0000-000000000000", "fiche": {"nom": "aespa", "mbid": "b", "pays": "KR", "debut": "2020"}, "dossier_groupe": "",
+               "images": {}, "biographie": "", "genre": "K-Pop", "candidats": {}, "images_album": {}}
+        with mock.patch.object(travaux.telechargement, "telecharger", side_effect=faux_telechargement):
+            c = travaux.ajouter(ctx, {"titre": "T", "album": "A", "video_id": "abcdefghijk"})
+            travaux._preparer(travaux.TRAVAUX[c["id"]])
+        j = travaux.TRAVAUX[c["id"]]
+        self.assertEqual(j["etat"], "pret", j["message"])
+        self.assertTrue(j["reduction"]["fait"])
+        self.assertLess(j["reduction"]["apres"], j["reduction"]["avant"] * 0.9)
+        self.assertEqual(j["sonde"]["video"]["codec"], "vp9")
+        self.assertIn("taille", j["message"])
+        self.assertEqual(travaux.fiche(c["id"])["clip"]["reduction"]["fait"], True)
+
+
 if __name__ == "__main__":
     unittest.main()
