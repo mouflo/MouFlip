@@ -109,6 +109,56 @@ def candidats(groupe: str, titre: str, extraire=None, combien: int = 5) -> list[
             for c in bons][:combien]
 
 
+_HANGUL = re.compile(r"[\u3130-\u318f\uac00-\ud7af]")
+
+
+def titre_du_clip(titre_video: str, groupe: str) -> str:
+    """Le titre de la chanson d'après le titre d'une vidéo : « [MV] VIVIZ(비비지) _ MANIAC » → « MANIAC », « aespa 에스파 'Supernova' MV » → « Supernova ».
+    Retourne '' si rien d'utilisable. Sert à recouper avec les morceaux des albums : une erreur ici ne crée pas de faux clip."""
+    t = titre_video or ""
+    guillemets = re.findall(r"['‘’\"“”]([^'‘’\"“”]{1,80})['‘’\"“”]", t)
+    t = re.sub(r"[\[\(【][^\]\)】]*\b(mv|m\s*/\s*v|official|music\s*video|4k|8k)\b[^\]\)】]*[\]\)】]", " ", t, flags=re.I)
+    t = re.sub(r"\b(official|mv|m\s*/\s*v|music\s*video|4k|8k|uhd|hd)\b", " ", t, flags=re.I)
+    t = re.sub(re.escape(groupe or "@@"), " ", t, flags=re.I)
+    t = re.sub(r"\(\s*[\u3130-\u318f\uac00-\ud7af\s]+\s*\)", " ", t)                    # « (비비지) »
+    if groupe and not _HANGUL.search(groupe):
+        t = " ".join(w for w in t.split() if not (_HANGUL.search(w) and re.fullmatch(r"[\u3130-\u318f\uac00-\ud7af]+", w)) or len(t.split()) == 1)
+    if guillemets:
+        g = next((x for x in guillemets if normaliser(x) and normaliser(x) != normaliser(groupe)), "")
+        if g:
+            return g.strip()
+    t = re.sub(r"[_|:]|\s[-–—]\s", " ", t)
+    t = re.sub(r"[\[\]【】]", " ", t)
+    return " ".join(t.split()).strip(" -–—_|")
+
+
+def decouvrir(groupe: str, pistes: set, extraire=None) -> list[dict]:
+    """Clips officiels trouvés SUR YOUTUBE (une recherche) dont le titre est un morceau des albums du groupe (recoupement avec `pistes`, des titres
+    normalisés). Pour les groupes que MusicBrainz connaît mal (titres-phares d'EP sans clip répertorié). Retourne [{titre, video_id, chaine, officielle}]."""
+    from yt_dlp import YoutubeDL
+    extraire = extraire or (lambda q, o: YoutubeDL(o).extract_info(q, download=False))
+    try:
+        r = extraire(f"ytsearch40:{groupe} MV", _options(plat=True)) or {}
+    except Exception as e:
+        logger.warning("Découverte YouTube impossible pour %s : %s", groupe, e)
+        return []
+    meilleurs = {}
+    for e in r.get("entries") or []:
+        if not e or not e.get("id"):
+            continue
+        titre = titre_du_clip(e.get("title") or "", groupe)
+        n = normaliser(titre)
+        if not n or n not in pistes:
+            continue
+        note = _note(e, groupe, titre)
+        if note < 40:                                         # live, émission, fan… ou titre absent : jamais
+            continue
+        if n not in meilleurs or note > meilleurs[n]["note"]:
+            meilleurs[n] = {"titre": titre.strip(), "video_id": e["id"], "chaine": e.get("channel") or e.get("uploader") or "", "note": note,
+                            "officielle": note >= SEUIL_OFFICIEL, "duree": e.get("duration") or 0}
+    return sorted(meilleurs.values(), key=lambda x: -x["note"])
+
+
 def _taille(f: dict, duree: float) -> int:
     """Taille d'un flux : la taille annoncée par YouTube, sinon estimée (débit × durée)."""
     t = f.get("filesize") or f.get("filesize_approx")

@@ -75,6 +75,7 @@ def _roots():
 
 
 CACHE_DIR = BASE_DIR / "data" / "cache"
+VERSION_LISTE = 2          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
 
 
 def _ecrire_json(chemin: Path, data):
@@ -97,7 +98,11 @@ def _construire_base(mbid: str) -> dict:
     """Interroge MusicBrainz, TheAudioDB, fanart.tv et Wikipédia (le plus long : jusqu'à une minute). Lève SourceIndisponible si MusicBrainz ne répond pas."""
     erreurs = []
     fiche = sources.fiche_mb(mbid)
-    clips = sources.clips_mb(mbid, fiche.get("nom", ""))
+    clips = sources.clips_mb(mbid, fiche.get("nom", ""), decouverte=lambda pistes: formats.decouvrir(fiche.get("nom", ""), pistes))
+    try:
+        rgs = [{"id": g["id"], "titre": g["titre"], "type": g["type"], "date": g["date"]} for g in sources._sorties(mbid)]
+    except sources.SourceIndisponible:
+        rgs = []
     audiodb, wiki = {}, ""
     try:
         audiodb = sources.images_audiodb(mbid)
@@ -113,7 +118,20 @@ def _construire_base(mbid: str) -> dict:
             wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
         except sources.SourceIndisponible as e:
             erreurs.append(str(e))
-    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "enregistre": time.time()}
+    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "rgs": rgs, "enregistre": time.time(), "v": VERSION_LISTE}
+
+
+def _fichier_ajouts(mbid: str) -> Path:
+    return CACHE_DIR / "ajouts" / f"{mbid}.json"
+
+
+def _avec_ajouts(mbid: str, clips: list) -> list:
+    """Les clips ajoutés à la main (lien YouTube) s'ajoutent à la liste du groupe, et restent après chaque « Actualiser »."""
+    ajouts = _lire_json(_fichier_ajouts(mbid)) or []
+    if not ajouts:
+        return clips
+    voulus = {noms.normaliser(a["titre"]) for a in ajouts}
+    return sorted([c for c in clips if noms.normaliser(c["titre"]) not in voulus] + ajouts, key=lambda c: (c.get("annee") or "9999", noms.normaliser(c["titre"])))
 
 
 def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
@@ -123,6 +141,9 @@ def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
     fichier = CACHE_DIR / "groupes" / f"{mbid}.json"
     avertissement = ""
     base = None if actualiser else (_lire_json(fichier))
+    ancienne = base if (base is not None and base.get("v", 1) < VERSION_LISTE) else None
+    if ancienne is not None:
+        base = None                                                      # liste enregistrée par une version plus ancienne : refaite (l'ancienne sert si ça échoue)
     if base is None:
         try:
             base = _construire_base(mbid)
@@ -133,6 +154,7 @@ def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
                 raise
             avertissement = f"MusicBrainz ne répond pas ({e}) : la liste enregistrée est gardée."
     fiche = base["fiche"]
+    base = {**base, "clips": _avec_ajouts(mbid, base["clips"])}
     dossier = existants.dossier_du_groupe(DOSSIER_CLIPS, [fiche["nom"]] + fiche.get("alias", []))
     locaux = existants.lister(dossier) if dossier else []
     nom_dossier = dossier.name if dossier else fiche["nom"]
@@ -266,7 +288,7 @@ def api_travaux():
         titre = str(c.get("titre", "")).strip()
         if not titre:
             continue
-        video_id = str(c.get("video_id") or choix.get(titre, ""))
+        video_id = str(c.get("video_id") or choix.get(titre, "") or next((x.get("video_id") for x in _groupe_complet(mbid)["clips"] if x["titre"] == titre and x.get("video_id")), "") or "")
         q = qualites.get(titre) or {}
         if q.get("video_id") and (not video_id or video_id == q["video_id"]):          # qualité choisie sur CETTE vidéo seulement
             video_id = q["video_id"]
@@ -277,6 +299,80 @@ def api_travaux():
                                               "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or "") or _resoudre_rg(ctx, titre, str(c.get("album") or titre)), "video_id": video_id,
                                               "format_id": fid, "qualite": texte}))
     return jsonify({"travaux": ajoutes})
+
+
+_RE_VIDEO = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/|/live/)([\w-]{11})|^([\w-]{11})$")
+
+
+@app.route("/api/ajout/analyser", methods=["POST"])
+def api_ajout_analyser():
+    """Un lien YouTube collé par l'utilisatrice → titre, album probable, année : de quoi ajouter à la main un clip que les bases ne connaissent pas."""
+    b = request.get_json(silent=True) or {}
+    mbid, lien = str(b.get("mbid", "")), str(b.get("lien", "")).strip()
+    m = _RE_VIDEO.search(lien)
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not m:
+        return jsonify({"error": "Colle le lien d'une vidéo YouTube (https://www.youtube.com/watch?v=… ou https://youtu.be/…)."}), 400
+    vid = m.group(1) or m.group(2)
+    try:
+        from yt_dlp import YoutubeDL
+        o = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True, "socket_timeout": 25}
+        o.update(ytcookies.opts())
+        infos = YoutubeDL(o).extract_info(f"https://www.youtube.com/watch?v={vid}", download=False) or {}
+    except Exception as e:
+        return jsonify({"error": f"YouTube ne donne pas cette vidéo : {str(e)[:160]}"}), 502
+    base = _lire_json(CACHE_DIR / "groupes" / f"{mbid}.json") or {}
+    nom = (base.get("fiche") or {}).get("nom", "")
+    titre = formats.titre_du_clip(infos.get("title") or "", nom) or (infos.get("title") or "")
+    date = infos.get("upload_date") or ""                                 # AAAAMMJJ
+    suggere = ""
+    try:
+        from datetime import date as _d
+        t0 = _d(int(date[:4]), int(date[4:6]), int(date[6:8]))
+        proches = []
+        for g in base.get("rgs") or []:
+            try:
+                p = (g["date"] + "-01-01").split("-") if len(g["date"]) == 4 else (g["date"] + "-01").split("-") if len(g["date"]) == 7 else g["date"].split("-")
+                ecart = (_d(int(p[0]), int(p[1]), int(p[2])) - t0).days
+            except (ValueError, IndexError):
+                continue
+            if -45 <= ecart <= 14:                                       # l'EP sort en général peu avant ou le jour de son clip
+                proches.append((abs(ecart) + (0 if g["type"] in ("EP", "Album") else 20), g["titre"]))
+        suggere = min(proches)[1] if proches else ""
+    except (ValueError, TypeError):
+        pass
+    return jsonify({"video_id": vid, "titre_video": infos.get("title", ""), "chaine": infos.get("channel") or infos.get("uploader") or "", "duree": infos.get("duration") or 0,
+                    "titre": titre, "annee": date[:4], "album_suggere": suggere or titre,
+                    "albums": sorted({g["titre"] for g in base.get("rgs") or []} | {c["album"] for c in base.get("clips") or []})})
+
+
+@app.route("/api/ajout/confirmer", methods=["POST"])
+def api_ajout_confirmer():
+    b = request.get_json(silent=True) or {}
+    mbid, titre, album, vid = str(b.get("mbid", "")), str(b.get("titre", "")).strip(), str(b.get("album", "")).strip(), str(b.get("video_id", ""))
+    annee = str(b.get("annee", "")).strip()
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not titre or len(titre) > 160 or len(album) > 160 or not re.fullmatch(r"[\w-]{11}", vid) or (annee and not re.fullmatch(r"\d{4}", annee)):
+        return jsonify({"ok": False, "error": "Titre, album (160 caractères au plus) ou année (4 chiffres) invalide."}), 400
+    base = _lire_json(CACHE_DIR / "groupes" / f"{mbid}.json") or {}
+    rg = next((g["id"] for g in base.get("rgs") or [] if noms.normaliser(g["titre"]) == noms.normaliser(album or titre) and g["type"] in ("EP", "Album")), "") or \
+        next((g["id"] for g in base.get("rgs") or [] if noms.normaliser(g["titre"]) == noms.normaliser(album or titre)), "")
+    ajouts = [a for a in (_lire_json(_fichier_ajouts(mbid)) or []) if noms.normaliser(a["titre"]) != noms.normaliser(titre)]
+    ajouts.append({"titre": titre, "album": album or titre, "annee": annee, "mbid": "", "type": "clip", "source": "ajout", "duree": 0, "rg": rg, "video_id": vid})
+    _ecrire_json(_fichier_ajouts(mbid), ajouts)
+    d = _choix_lire()
+    d.setdefault(mbid, {})[titre] = vid                                   # la vidéo collée est celle qui sera téléchargée
+    _ecrire_json(_choix_fichier(), d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ajout/retirer", methods=["POST"])
+def api_ajout_retirer():
+    b = request.get_json(silent=True) or {}
+    mbid, titre = str(b.get("mbid", "")), str(b.get("titre", "")).strip()
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        return jsonify({"ok": False, "error": "Groupe invalide."}), 400
+    ajouts = [a for a in (_lire_json(_fichier_ajouts(mbid)) or []) if a["titre"] != titre]
+    _ecrire_json(_fichier_ajouts(mbid), ajouts)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/travaux/<tid>/fiche", methods=["GET"])

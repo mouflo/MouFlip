@@ -213,7 +213,7 @@ def _pistes_des_albums(mbid: str) -> dict:
     return out
 
 
-def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
+def clips_mb(mbid: str, nom_groupe: str, decouverte=None) -> list[dict]:
     """Les clips candidats : (1) les vidéos que MusicBrainz connaît, (2) les singles et les titres-phares d'EP / d'album. Les remix, versions,
     chorégraphies, concerts et coulisses sont écartés. « source » dit d'où vient la ligne : « video » (MusicBrainz connaît cette vidéo)
     ou « sortie » (un single ou titre-phare : la vidéo officielle est à vérifier sur YouTube)."""
@@ -238,7 +238,7 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
         x, y = d(a), d(b)
         return (y - x).days if x and y else None
 
-    def ajouter(titre, album, date, source, mb_id="", duree=0, rg=""):
+    def ajouter(titre, album, date, source, mb_id="", duree=0, rg="", video_id=""):
         n = normaliser(titre) or titre
         if _VARIANTE.search(titre) or _PAS_CLIP.search(titre):
             return
@@ -249,15 +249,20 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
             ecart = _jours(singles[n], album_pistes[1]) if n in singles else None
             if n not in singles or (ecart is not None and 0 <= ecart <= 100):
                 album, date, rg = album_pistes[0], (date or album_pistes[1]), album_pistes[2]
+        if not date and n in singles:
+            date = singles[n]                                    # année du single quand le clip vient de YouTube sans date
         annee = (date or "")[:4]
         if n in candidats:
             c = candidats[n]
+            if video_id and not c.get("video_id"):
+                c["video_id"] = video_id
             if source == "video":
                 c["source"] = "video"
             if annee and (not c["annee"] or annee < c["annee"]):
                 c["annee"] = annee
             return
-        candidats[n] = {"titre": titre.strip(), "album": album or titre.strip(), "annee": annee, "mbid": mb_id, "type": "clip", "source": source, "duree": duree, "rg": rg}
+        candidats[n] = {"titre": titre.strip(), "album": album or titre.strip(), "annee": annee, "mbid": mb_id, "type": "clip", "source": source, "duree": duree, "rg": rg,
+                         "video_id": video_id}
 
     # (1) vidéos répertoriées par MusicBrainz
     offset = 0
@@ -279,6 +284,13 @@ def clips_mb(mbid: str, nom_groupe: str) -> list[dict]:
     for g in sorties:
         if g["type"] == "Single" or normaliser(g["titre"]) in pistes:
             ajouter(g["titre"], g["titre"] if g["type"] == "Single" else "", g["date"], "sortie", rg=g["id"])
+    # (3) clips trouvés sur YouTube dont le titre est un morceau d'un album (MusicBrainz les ignore souvent : titres-phares d'EP)
+    if decouverte:
+        try:
+            for d in decouverte(set(pistes)):
+                ajouter(d["titre"], "", "", "youtube", "", d.get("duree", 0), "", d["video_id"])
+        except Exception:
+            pass
     sortie = sorted(candidats.values(), key=lambda c: (c["annee"] or "9999", normaliser(c["titre"])))
     if erreurs_pistes:
         for c in sortie:

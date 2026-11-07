@@ -187,12 +187,18 @@ class RoutesTest(unittest.TestCase):
         self._p_qualite = mock.patch.object(A, "_qualite_fichier", return_value=Path(self.tmp.name) / "choix_qualite.json")
         self._p_choix.start()
         self._p_qualite.start()
+        self._p_yt = mock.patch.object(formats, "decouvrir", return_value=[])                 # jamais de vrai réseau YouTube dans les tests
+        self._p_rgs = mock.patch.object(sources, "_sorties", return_value=[])
+        self._p_yt.start()
+        self._p_rgs.start()
         A._CACHE_GROUPES.clear()
         self.c = A.app.test_client()
         self.c.environ_base["REMOTE_ADDR"] = "192.168.1.50"
         self.assertEqual(self.c.post("/login", data={"username": "admin", "password": "mdp-de-test-123"}).status_code, 302)
 
     def tearDown(self):
+        self._p_yt.stop()
+        self._p_rgs.stop()
         self._p_choix.stop()
         self._p_qualite.stop()
         self.A.DOSSIER_CLIPS = self._racine
@@ -254,6 +260,23 @@ class RoutesTest(unittest.TestCase):
         with mock.patch.object(sources, "fiche_mb", side_effect=sources.SourceIndisponible("musicbrainz.org ne répond pas")):
             r = self.c.get("/api/groupe/" + autre)
         self.assertEqual(r.status_code, 502)                                   # jamais vu et MusicBrainz en panne : erreur dite
+
+    def test_liste_enregistree_par_une_ancienne_version_est_refaite_toute_seule(self):
+        p1, p2, p3, p4 = self._faux_mb()
+        with p1, p2 as clips_mb, p3, p4:
+            self.c.get("/api/groupe/" + self.MB)
+            fichier = self.A.CACHE_DIR / "groupes" / f"{self.MB}.json"
+            base = json.loads(fichier.read_text())
+            base["v"] = 1                                                        # enregistrée avant l'ajout de la découverte YouTube
+            fichier.write_text(json.dumps(base))
+            self.c.get("/api/groupe/" + self.MB)
+            self.assertEqual(clips_mb.call_count, 2)                             # refaite
+            self.c.get("/api/groupe/" + self.MB)
+            self.assertEqual(clips_mb.call_count, 2)                             # puis de nouveau lue sur place
+        with mock.patch.object(sources, "fiche_mb", side_effect=sources.SourceIndisponible("musicbrainz.org ne répond pas")):
+            base = json.loads(fichier.read_text()); base["v"] = 1; fichier.write_text(json.dumps(base))
+            d = self.c.get("/api/groupe/" + self.MB).get_json()                  # MusicBrainz en panne : l'ancienne liste sert quand même
+        self.assertEqual(len(d["clips"]), 1)
 
     def test_la_deja_la_se_recalcule_meme_avec_la_liste_enregistree(self):
         p1, p2, p3, p4 = self._faux_mb()
@@ -345,6 +368,40 @@ class RoutesTest(unittest.TestCase):
             self.assertEqual(self.A._resoudre_rg(ctx, "LEMONADE", "LEMONADE"), "rg_album")      # le single n'a pas d'image, l'album du même nom oui
             self.assertEqual(self.A._resoudre_rg({"mbid": self.MB, "images_album": {}}, "LEMONADE", "LEMONADE"), "rg_single")
             self.assertEqual(self.A._resoudre_rg(ctx, "Inconnu", "Autre album"), "")
+
+    def test_ajout_a_la_main_analyse_confirme_et_survit_a_l_actualisation(self):
+        p1, p2, p3, p4 = self._faux_mb()
+        rgs = [{"id": "rgV", "titre": "VERSUS", "type": "EP", "date": "2023-11-02"}, {"id": "rgS", "titre": "MANIAC", "type": "Single", "date": "2023-11-02"}]
+        with p1, p2, p3, p4:
+            self.c.get("/api/groupe/" + self.MB)                                 # crée la liste enregistrée
+            fichier = self.A.CACHE_DIR / "groupes" / f"{self.MB}.json"
+            base = json.loads(fichier.read_text())
+            base["rgs"] = rgs
+            base["fiche"]["nom"] = "VIVIZ"
+            fichier.write_text(json.dumps(base))
+            infos = {"title": "VIVIZ (비비지) - 'MANIAC' MV", "channel": "BPM Entertainment", "duration": 196, "upload_date": "20231102"}
+            with mock.patch("yt_dlp.YoutubeDL") as yd:
+                yd.return_value.extract_info.return_value = infos
+                r = self.c.post("/api/ajout/analyser", json={"mbid": self.MB, "lien": "https://www.youtube.com/watch?v=9JFi7MmjtGA&list=RD83C3TZ4Zm_o&index=23"}).get_json()
+            self.assertEqual((r["video_id"], r["titre"], r["annee"], r["album_suggere"]), ("9JFi7MmjtGA", "MANIAC", "2023", "VERSUS"))     # l'EP sorti le jour du clip, pas le single
+            ok = self.c.post("/api/ajout/confirmer", json={"mbid": self.MB, "titre": "MANIAC", "album": "VERSUS", "annee": "2023", "video_id": "9JFi7MmjtGA"}).get_json()
+            self.assertTrue(ok["ok"])
+            clips = self.c.get("/api/groupe/" + self.MB).get_json()["clips"]
+            m = next(c for c in clips if c["titre"] == "MANIAC")
+            self.assertEqual((m["album"], m["source"], m["video_id"], m["rg"]), ("VERSUS", "ajout", "9JFi7MmjtGA", "rgV"))
+            self.assertEqual(self.c.get("/api/choix/" + self.MB).get_json()["choix"]["MANIAC"], "9JFi7MmjtGA")       # la vidéo collée sera téléchargée
+            with mock.patch.object(sources, "clips_mb", return_value=[]):
+                apres = self.c.get("/api/groupe/" + self.MB + "?actualiser=1").get_json()["clips"]
+            self.assertEqual([c["titre"] for c in apres], ["MANIAC"])            # l'ajout reste après « Actualiser »
+            self.c.post("/api/ajout/retirer", json={"mbid": self.MB, "titre": "MANIAC"})
+            with mock.patch.object(sources, "clips_mb", return_value=[]):
+                self.assertEqual(self.c.get("/api/groupe/" + self.MB + "?actualiser=1").get_json()["clips"], [])
+
+    def test_ajout_lien_invalide_et_champs_invalides(self):
+        self.assertEqual(self.c.post("/api/ajout/analyser", json={"mbid": self.MB, "lien": "pas un lien"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/ajout/confirmer", json={"mbid": self.MB, "titre": "", "album": "x", "video_id": "9JFi7MmjtGA"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/ajout/confirmer", json={"mbid": self.MB, "titre": "X", "album": "x", "video_id": "court"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/ajout/confirmer", json={"mbid": self.MB, "titre": "X", "album": "x", "annee": "20x", "video_id": "9JFi7MmjtGA"}).status_code, 400)
 
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
@@ -462,3 +519,43 @@ class VersionsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DecouverteTest(unittest.TestCase):
+    PISTES = {"maniac", "bop bop", "reset"}
+
+    def _yt(self, entrees):
+        return lambda q, o: {"entries": entrees}
+
+    def test_titres_de_videos(self):
+        t = formats.titre_du_clip
+        self.assertEqual(t("[MV] VIVIZ(비비지) _ MANIAC", "VIVIZ"), "MANIAC")
+        self.assertEqual(t("aespa 에스파 'Supernova' MV", "aespa"), "Supernova")
+        self.assertEqual(t("VIVIZ - Bop Bop! (Official MV)", "VIVIZ"), "Bop Bop!")
+        self.assertEqual(t("(G)I-DLE - 'Queencard' Official Music Video", "(G)I-DLE"), "Queencard")
+
+    def test_seuls_les_morceaux_des_albums_et_les_chaines_officielles_sont_gardes(self):
+        entrees = [{"id": "aaaaaaaaaaa", "title": "[MV] VIVIZ(비비지) _ MANIAC", "channel": "1theK (원더케이)", "duration": 196},
+                   {"id": "bbbbbbbbbbb", "title": "VIVIZ (비비지) 'MANIAC' Dance Practice", "channel": "BPM Entertainment", "duration": 200},      # chorégraphie : jamais
+                   {"id": "ccccccccccc", "title": "VIVIZ - Interview 'Autre'", "channel": "Mnet K-POP", "duration": 300},                       # pas un morceau
+                   {"id": "ddddddddddd", "title": "VIVIZ 'Reset' MV", "channel": "Fan Channel", "duration": 190}]                                # chaîne de fan : écartée
+        r = formats.decouvrir("VIVIZ", self.PISTES, self._yt(entrees))
+        self.assertEqual([(x["titre"], x["video_id"], x["officielle"]) for x in r], [("MANIAC", "aaaaaaaaaaa", True)])
+
+    def test_youtube_en_panne_ne_casse_rien(self):
+        def casse(q, o):
+            raise RuntimeError("HTTP 429")
+        self.assertEqual(formats.decouvrir("VIVIZ", self.PISTES, casse), [])
+
+    def test_clips_mb_ajoute_les_clips_decouverts_avec_leur_album_et_leur_video(self):
+        def faux(url, params=None, max_essais=5):
+            if url.endswith("/recording"):
+                return {"count": 0, "recordings": []}
+            if url.endswith("/release-group"):
+                return {"count": 1, "release-groups": [{"id": "rgV", "title": "VERSUS", "primary-type": "EP", "first-release-date": "2023-11-02"}]}
+            return {"release-count": 1, "releases": [{"title": "VERSUS", "date": "2023-11-02", "release-group": {"id": "rgV", "title": "VERSUS", "primary-type": "EP", "first-release-date": "2023-11-02"},
+                                                      "media": [{"tracks": [{"title": "MANIAC"}, {"title": "Autre piste"}]}]}]}
+        with mock.patch.object(sources, "_get", side_effect=faux):
+            r = sources.clips_mb("x", "VIVIZ", decouverte=lambda pistes: [{"titre": "MANIAC", "video_id": "aaaaaaaaaaa", "duree": 196}] if "maniac" in pistes else [])
+        m = next(c for c in r if c["titre"] == "MANIAC")
+        self.assertEqual((m["album"], m["annee"], m["rg"], m["video_id"], m["source"]), ("VERSUS", "2023", "rgV", "aaaaaaaaaaa", "youtube"))
