@@ -95,6 +95,21 @@
     .fi-barre .btn { padding:11px 14px; }
     @media (max-width:560px) { .fi-barre { flex-wrap:wrap; } .fi-barre .resume { flex:1 1 100%; } .fi-barre .btn { flex:1; } }
     @media (max-width:560px) { .fi-entete { flex-direction:column; align-items:flex-start; } .fi-entete .affiche { width:100%; max-width:none; } }
+
+    /* cases d'images : fond sombre IMPOSÉ (les styles de boutons du thème ne doivent pas les colorer) et légendes lisibles */
+    #fiche button.vign { background:#1b1d20 !important; color:#eceff3 !important; border:2px solid #3a3f45 !important; box-shadow:none !important; font-weight:400 !important; }
+    #fiche button.vign:hover { border-color:#6b737c !important; }
+    #fiche button.vign.sel { border-color:var(--accent) !important; background:#1d2a1f !important; }
+    #fiche button.vign.fixe { opacity:.8; }
+    #fiche button.vign small { display:block; padding:7px 8px 8px; font-size:.8rem; line-height:1.35; color:#eceff3 !important; background:transparent !important; }
+    #fiche .vign .src { display:inline-block; padding:1px 8px; border-radius:10px; font-weight:700; font-size:.74rem; background:#27384d; color:#d3e6ff; }
+    #fiche .vign .src.audiodb { background:#3d2b4f; color:#efdcff; }
+    #fiche .vign .src.video { background:#2f3f2c; color:#d9f2d4; }
+    #fiche .vign .actu { color:#a6e49f; font-weight:700; }
+    #fiche .vign .remp { color:#f4c76e; font-weight:600; }
+    #fiche .vign .dim { display:block; color:#aeb5bd; font-size:.72rem; margin-top:2px; }
+    #fiche button.vign.aucune { color:#eceff3 !important; font-weight:600 !important; }
+    #fiche .vign .coche { background:var(--accent); }
     /* barre des téléchargements : toujours visible en bas, la page reste défilable derrière ; un toucher déplie la liste */
     #travaux { position:fixed; left:0; right:0; bottom:0; z-index:50; margin:0; padding:0; border-radius:12px 12px 0 0; box-shadow:0 -4px 18px rgba(0,0,0,.45); max-width:960px; margin-left:auto; margin-right:auto; }
     #travaux[hidden] { display:none; }
@@ -371,18 +386,22 @@ let FI = null;
 const urlPoster = (id, pid) => '/api/travaux/' + id + '/poster/' + pid;
 const urlExistant = chemin => '/api/existant?chemin=' + encodeURIComponent(chemin);
 const dureeMin = s => s ? Math.floor(s / 60) + ' min ' + String(Math.round(s % 60)).padStart(2, '0') + ' s' : '';
-function vign(classe, url, legende, sel, attrs, extra) {
-    return `<button type="button" class="vign ${classe}${sel ? ' sel' : ''}" ${attrs || ''}><img loading="lazy" referrerpolicy="no-referrer" src="${esc(url)}" alt=""><span class="coche">✓</span><small>${legende}</small></button>`;
+function etiquette(source) {                                          // « fanart.tv » / « TheAudioDB » en étiquette colorée
+    const cls = source === 'TheAudioDB' ? 'audiodb' : source === 'vidéo' ? 'video' : '';
+    return `<span class="src ${cls}">${esc(source)}</span>`;
+}
+function vign(classe, url, legende, sel, attrs) {
+    return `<button type="button" class="vign ${classe}${sel ? ' sel' : ''}" ${attrs || ''}><img loading="lazy" referrerpolicy="no-referrer" src="${esc(url)}" alt="" onload="var d=this.parentNode.querySelector('.dim');if(d)d.textContent=this.naturalWidth+' × '+this.naturalHeight+' px'"><span class="coche">✓</span><small>${legende}<span class="dim"></span></small></button>`;
 }
 function bandeImages(typeCss, bloc, cle) {
     // une image du groupe ou de l'album : « actuelle » (déjà dans Emby), les propositions, « aucune »
     const ex = bloc.existant && bloc.existant.present, ch = bloc.choisi;
     const defautActuelle = ex && ch === null;
     let t = '';
-    if (ex) t += vign(typeCss + ' actuelle', urlExistant(bloc.existant.chemin), 'Actuelle · déjà dans Emby (gardée)', defautActuelle, `data-cle="${cle}" data-url="__garder__"`);
+    if (ex) t += vign(typeCss + ' actuelle', urlExistant(bloc.existant.chemin), '<span class="actu">✔ Actuelle</span> · déjà dans Emby, gardée', defautActuelle, `data-cle="${cle}" data-url="__garder__"`);
     bloc.candidats.forEach((c, i) => {
         const sel = ch === c.url || (ch === null && !ex && i === 0);
-        t += vign(typeCss, c.url, esc(c.source) + (ex && sel ? ' · remplacera l’actuelle' : ''), sel, `data-cle="${cle}" data-url="${esc(c.url)}"`);
+        t += vign(typeCss, c.url, etiquette(c.source) + (ex && sel ? ' <span class="remp">♻ remplacera l’actuelle</span>' : ''), sel, `data-cle="${cle}" data-url="${esc(c.url)}"`);
     });
     if (!bloc.candidats.length && !ex) t += '<div class="muted" style="padding:10px">Aucune image trouvée.</div>';
     t += `<button type="button" class="vign aucune${ch === '' ? ' sel' : ''}" data-cle="${cle}" data-url="">Aucune<span class="coche">✓</span></button>`;
@@ -408,8 +427,8 @@ function rendreFiche() {
     const v = c.video, a = c.audio, vol = c.volume || {};
     // fonds d'écran : emplacements déjà occupés + propositions à cocher pour les places libres
     const choisisFonds = g.fanart.choisis === null ? g.fanart.candidats.slice(0, g.fanart.libres).map(x => x.url) : g.fanart.choisis;
-    const fonds = g.fanart.existants.filter(x => x.present).map(x => vign('fond fixe', urlExistant(x.chemin), 'Déjà dans Emby · ' + esc(x.fichier), false, 'disabled'))
-        .concat(g.fanart.candidats.map(x => vign('fond', x.url, esc(x.source), choisisFonds.includes(x.url), `data-fond="${esc(x.url)}"`))).join('');
+    const fonds = g.fanart.existants.filter(x => x.present).map(x => vign('fond fixe', urlExistant(x.chemin), '<span class="actu">✔ Déjà dans Emby</span> · ' + esc(x.fichier), false, 'disabled'))
+        .concat(g.fanart.candidats.map(x => vign('fond', x.url, etiquette(x.source), choisisFonds.includes(x.url), `data-fond="${esc(x.url)}"`))).join('');
     $('ficheCorps').innerHTML = `
     <div class="fi-hero" style="${fond ? `background-image:url('${esc(fond)}')` : ''}">
         <div class="fi-haut"><button class="btn small ghost" data-fermer="1">← Retour</button><span class="pill ok">🧾 Fiche · ce qui sera dans Emby</span></div>
@@ -432,7 +451,7 @@ function rendreFiche() {
             <dt>Fichier</dt><dd>${esc(c.destination)}</dd>
         </dl>
         <h3 style="margin-top:12px">Poster du clip</h3><div class="aide">L'image qui s'affichera sur la vignette du clip dans Emby (« …-poster.jpg »).</div>
-        <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>
+        <div class="bande">${c.posters.map(p => vign('fond', urlPoster(f.id, p.id), (p.id === 'yt' ? etiquette('YouTube') : etiquette('vidéo')) + ' ' + esc(p.label), p.id === posterId, `data-poster="${esc(p.id)}"`)).join('')}</div>
       </section>
       <section class="fi"><h3>🔗 Lien avec Emby</h3>${blocEmby(f)}</section>
       <section class="fi"><h3>🎤 Le groupe : ${esc(g.nom)}</h3>
