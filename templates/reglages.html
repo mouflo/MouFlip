@@ -56,12 +56,12 @@
 
     <div class="panel" data-onglet="Général">
         <h2>📉 Réduire la taille des clips</h2>
-        <div class="sub">Un clip 4K de YouTube pèse 250 à 450 Mo. Cette option réencode <b>l'image en VP9</b> (le même format que tes clips actuels, aucun souci de lecteur) à qualité constante ; <b>le son n'est pas touché</b>. Mesuré sur un clip 4K : environ <b>la moitié de la taille, avec une qualité égale à l'AV1 de YouTube</b>. Compte environ 10 minutes de plus par clip (le serveur travaille à fond pendant ce temps). Désactivé, le fichier de YouTube est gardé tel quel.</div>
+        <div class="sub">Un clip 4K de YouTube pèse 250 à 450 Mo. Cette option réencode <b>l'image en VP9</b> (le même format que tes clips actuels, aucun souci de lecteur) à qualité constante ; <b>le son n'est pas touché</b>. Mesuré sur deux clips 4K entiers : environ <b>60 % de la taille, soit la taille de l'AV1 de YouTube, avec une qualité égale</b>. Compte environ 10 minutes de plus par clip (le serveur travaille à fond pendant ce temps). Désactivé, le fichier de YouTube est gardé tel quel.</div>
         <label class="check"><input type="checkbox" id="redActif"> Réduire la taille des clips téléchargés</label>
         <div class="field" style="max-width:420px"><label for="redNiveau">Niveau</label><select id="redNiveau">
-            <option value="27">Très peu de perte : environ 60 % de la taille</option>
-            <option value="30">Équilibré : environ 50 % de la taille (conseillé)</option>
-            <option value="36">Plus petit : environ 35 % de la taille (détails un peu moins fins)</option></select></div>
+            <option value="27">Très peu de perte : environ 70 % de la taille</option>
+            <option value="30">Équilibré : environ 60 % de la taille (conseillé)</option>
+            <option value="36">Plus petit : environ 40 % de la taille (détails un peu moins fins)</option></select></div>
         <div class="sub">Un clip déjà en AV1 n'est pas réencodé, et si le gain est inférieur à 10 % le fichier d'origine est gardé.</div>
         <div class="row"><button class="btn" id="redSave">Enregistrer</button></div>
         <div id="redMsg"></div>

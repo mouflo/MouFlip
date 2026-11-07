@@ -20,7 +20,7 @@ Le script installe ffmpeg, l'environnement Python, **deno** (YouTube en a besoin
 | fanart.tv | logos, bannières, fonds, pochettes (clé personnelle gratuite sur fanart.tv) |
 | TheAudioDB | clé personnelle facultative (la clé publique de test est utilisée sinon) |
 | Cookies YouTube | formats Premium (fichier `cookies.txt` au format Netscape exporté de ton navigateur) |
-| Réduire la taille | réencode l'image en VP9 pour diviser la taille par 2 environ (désactivé par défaut, ~10 min par clip) |
+| Réduire la taille | réencode l'image en VP9 pour descendre à 60 % de la taille environ (désactivé par défaut, ~10 min par clip) |
 | Volume des clips | niveau cible (89 dB comme les thèmes MouFlopening), réglage sans perte, débit AAC de secours |
 
 Les clés vont dans `data/secrets.env` (droits 600, jamais sur GitHub). Tu peux aussi les écrire à la main : `bash set-secret.sh NOM "valeur"`.

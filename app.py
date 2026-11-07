@@ -79,7 +79,7 @@ def _roots():
 
 
 CACHE_DIR = BASE_DIR / "data" / "cache"
-VERSION_LISTE = 3          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
+VERSION_LISTE = 4          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
 
 
 def _ecrire_json(chemin: Path, data):
@@ -98,24 +98,61 @@ def _lire_json(chemin: Path):
         return None
 
 
+def _proposer_album(rgs: list, date: str) -> tuple[str, str]:
+    """(titre, id) du groupe de sorties dont la date est la plus proche de celle du clip : l'EP sort en général peu avant ou le jour du clip.
+    ('', '') si aucune sortie n'est assez proche. `date` : AAAAMMJJ ou AAAA-MM-JJ."""
+    from datetime import date as _d
+    d = (date or "").replace("-", "")
+    try:
+        t0 = _d(int(d[:4]), int(d[4:6]), int(d[6:8]))
+    except (ValueError, IndexError):
+        return "", ""
+    proches = []
+    for g in rgs or []:
+        try:
+            p = (g["date"] + "-01-01").split("-") if len(g["date"]) == 4 else (g["date"] + "-01").split("-") if len(g["date"]) == 7 else g["date"].split("-")
+            ecart = (_d(int(p[0]), int(p[1]), int(p[2])) - t0).days
+        except (ValueError, IndexError, KeyError):
+            continue
+        if -45 <= ecart <= 14:
+            proches.append((abs(ecart) + (0 if g["type"] in ("EP", "Album") else 20), g["titre"], g["id"]))
+    return (min(proches)[1], min(proches)[2]) if proches else ("", "")
+
+
 def _fichier_chaines(mbid: str) -> Path:
     return CACHE_DIR / "chaines" / f"{mbid}.json"
 
 
+def _sources_toi(mbid: str) -> list[dict]:
+    """Chaînes et playlists AJOUTÉES par l'utilisatrice pour cet artiste. [{type, id, nom, url, channel_id?}]."""
+    return [{"type": "chaine", **x} if "type" not in x else x for x in (_lire_json(_fichier_chaines(mbid)) or [])]
+
+
 def _chaines_officielles(mbid: str) -> list[dict]:
-    """Les chaînes YouTube officielles du groupe : celles de MusicBrainz + celles ajoutées par l'utilisatrice. [{id, nom, url, source}]."""
+    """Les sources officielles de l'artiste : chaînes de MusicBrainz, celles ajoutées par l'utilisatrice, et celles de son GROUPE PRINCIPAL (YUQI → i-dle :
+    ses clips sont publiés sur la chaîne du groupe). Chaînes et playlists. [{type, id, nom, url, source}]."""
     base = _lire_json(CACHE_DIR / "groupes" / f"{mbid}.json") or {}
-    toutes = [{**x, "source": "MusicBrainz"} for x in base.get("chaines_mb", [])] + [{**x, "source": "toi"} for x in (_lire_json(_fichier_chaines(mbid)) or [])]
+    toutes = [{"type": "chaine", **x, "source": "MusicBrainz"} for x in base.get("chaines_mb", [])]
+    toutes += [{"type": "chaine", **x, "source": f"MusicBrainz, groupe {x.get('parent', '')}"} for x in base.get("chaines_parents", [])]
+    toutes += [{**x, "source": "toi"} for x in _sources_toi(mbid)]
+    for par in (base.get("fiche") or {}).get("parents", []):
+        toutes += [{**x, "source": f"toi, groupe {par.get('nom', '')}"} for x in _sources_toi(par["id"])]
     vues, sortie = set(), []
     for x in toutes:
-        if x.get("id") and x["id"] not in vues:
-            vues.add(x["id"])
+        if x.get("id") and (x["type"], x["id"]) not in vues:
+            vues.add((x["type"], x["id"]))
             sortie.append(x)
     return sortie
 
 
 def _ids_chaines(mbid: str) -> set:
-    return {x["id"] for x in _chaines_officielles(mbid)}
+    """Identifiants des chaînes officielles : les chaînes, et la chaîne qui publie chaque playlist officielle."""
+    liste = _chaines_officielles(mbid)
+    return {x["id"] for x in liste if x["type"] == "chaine"} | {x["channel_id"] for x in liste if x["type"] == "playlist" and x.get("channel_id")}
+
+
+def _ids_playlists(mbid: str) -> list:
+    return [x["id"] for x in _chaines_officielles(mbid) if x["type"] == "playlist"]
 
 
 def _construire_base(mbid: str) -> dict:
@@ -131,12 +168,33 @@ def _construire_base(mbid: str) -> dict:
             cid = chaines.id_depuis_url(u)
             if cid:
                 chaines_mb.append({"id": cid, "nom": "", "url": u})
-    ids = {x["id"] for x in chaines_mb} | {x["id"] for x in (_lire_json(_fichier_chaines(mbid)) or [])}
-    clips = sources.clips_mb(mbid, fiche.get("nom", ""), decouverte=lambda pistes: formats.decouvrir(fiche.get("nom", ""), pistes, chaines=ids))
+    chaines_parents = []
+    for par in fiche.get("parents", []):                             # le groupe dont l'artiste est membre : sa chaîne publie souvent les clips solo
+        try:
+            for u in sources.fiche_mb(par["id"]).get("youtube", [])[:3]:
+                try:
+                    ch = chaines.resoudre(u)
+                    chaines_parents.append({"id": ch["id"], "nom": ch["nom"], "url": ch["url"], "parent": par["nom"], "parent_id": par["id"]})
+                except chaines.ChaineError:
+                    cid = chaines.id_depuis_url(u)
+                    if cid:
+                        chaines_parents.append({"id": cid, "nom": "", "url": u, "parent": par["nom"], "parent_id": par["id"]})
+        except sources.SourceIndisponible:
+            pass
+    toi = _sources_toi(mbid) + [x for par in fiche.get("parents", []) for x in _sources_toi(par["id"])]
+    ids = {x["id"] for x in chaines_mb + chaines_parents} | {x["id"] for x in toi if x["type"] == "chaine"} | {x.get("channel_id") for x in toi if x["type"] == "playlist" and x.get("channel_id")}
+    listes = [x["id"] for x in toi if x["type"] == "playlist"]
+    noms_artiste = [fiche.get("nom", "")] + list(fiche.get("alias", []))
+    clips = sources.clips_mb(mbid, fiche.get("nom", ""), decouverte=lambda pistes: formats.decouvrir(fiche.get("nom", ""), pistes, chaines=ids, playlists=listes, noms=noms_artiste))
     try:
         rgs = [{"id": g["id"], "titre": g["titre"], "type": g["type"], "date": g["date"]} for g in sources._sorties(mbid)]
     except sources.SourceIndisponible:
         rgs = []
+    for c in clips:                                                  # clip trouvé sur YouTube sans album connu : l'album sorti à la date de sa mise en ligne
+        if c.get("source") == "youtube" and not c.get("rg") and c.get("date"):
+            titre_album, rg = _proposer_album(rgs, c["date"])
+            if titre_album:
+                c["album"], c["rg"] = titre_album, rg
     audiodb, wiki = {}, ""
     try:
         audiodb = sources.images_audiodb(mbid)
@@ -152,7 +210,7 @@ def _construire_base(mbid: str) -> dict:
             wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
         except sources.SourceIndisponible as e:
             erreurs.append(str(e))
-    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "rgs": rgs, "chaines_mb": chaines_mb, "enregistre": time.time(), "v": VERSION_LISTE}
+    return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "rgs": rgs, "chaines_mb": chaines_mb, "chaines_parents": chaines_parents, "enregistre": time.time(), "v": VERSION_LISTE}
 
 
 def _fichier_ajouts(mbid: str) -> Path:
@@ -360,22 +418,7 @@ def api_ajout_analyser():
     nom = (base.get("fiche") or {}).get("nom", "")
     titre = formats.titre_du_clip(infos.get("title") or "", nom) or (infos.get("title") or "")
     date = infos.get("upload_date") or ""                                 # AAAAMMJJ
-    suggere = ""
-    try:
-        from datetime import date as _d
-        t0 = _d(int(date[:4]), int(date[4:6]), int(date[6:8]))
-        proches = []
-        for g in base.get("rgs") or []:
-            try:
-                p = (g["date"] + "-01-01").split("-") if len(g["date"]) == 4 else (g["date"] + "-01").split("-") if len(g["date"]) == 7 else g["date"].split("-")
-                ecart = (_d(int(p[0]), int(p[1]), int(p[2])) - t0).days
-            except (ValueError, IndexError):
-                continue
-            if -45 <= ecart <= 14:                                       # l'EP sort en général peu avant ou le jour de son clip
-                proches.append((abs(ecart) + (0 if g["type"] in ("EP", "Album") else 20), g["titre"]))
-        suggere = min(proches)[1] if proches else ""
-    except (ValueError, TypeError):
-        pass
+    suggere, _rg = _proposer_album(base.get("rgs") or [], date)
     return jsonify({"video_id": vid, "titre_video": infos.get("title", ""), "chaine": infos.get("channel") or infos.get("uploader") or "", "duree": infos.get("duration") or 0,
                     "titre": titre, "annee": date[:4], "album_suggere": suggere or titre,
                     "albums": sorted({g["titre"] for g in base.get("rgs") or []} | {c["album"] for c in base.get("clips") or []})})
@@ -431,10 +474,11 @@ def api_chaines_ajouter():
     if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
         return jsonify({"ok": False, "error": "Groupe invalide."}), 400
     try:
-        ch = chaines.resoudre(str(b.get("lien", "")))
+        ch = chaines.resoudre_source(str(b.get("lien", "")))
     except chaines.ChaineError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
-    liste = [x for x in (_lire_json(_fichier_chaines(mbid)) or []) if x["id"] != ch["id"]] + [{"id": ch["id"], "nom": ch["nom"], "url": ch["url"]}]
+    item = {k: v for k, v in ch.items() if k in ("type", "id", "nom", "url", "channel_id")}
+    liste = [x for x in _sources_toi(mbid) if not (x["type"] == item["type"] and x["id"] == item["id"])] + [item]
     _ecrire_chaines_toi(mbid, liste)
     return jsonify({"ok": True, "chaine": ch, "chaines": _chaines_officielles(mbid)})
 
@@ -446,7 +490,7 @@ def api_chaines_officielle():
     mbid, cid, nom = str(b.get("mbid", "")), str(b.get("channel_id", "")), str(b.get("nom", ""))[:120]
     if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not chaines.ID_VALIDE.fullmatch(cid):
         return jsonify({"ok": False, "error": "Chaîne invalide."}), 400
-    liste = [x for x in (_lire_json(_fichier_chaines(mbid)) or []) if x["id"] != cid] + [{"id": cid, "nom": nom, "url": f"https://www.youtube.com/channel/{cid}"}]
+    liste = [x for x in _sources_toi(mbid) if not (x["type"] == "chaine" and x["id"] == cid)] + [{"type": "chaine", "id": cid, "nom": nom, "url": f"https://www.youtube.com/channel/{cid}"}]
     _ecrire_chaines_toi(mbid, liste)
     return jsonify({"ok": True, "chaines": _chaines_officielles(mbid)})
 
@@ -458,7 +502,7 @@ def api_chaines_retirer():
     mbid, cid = str(b.get("mbid", "")), str(b.get("id", ""))
     if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
         return jsonify({"ok": False, "error": "Groupe invalide."}), 400
-    _ecrire_chaines_toi(mbid, [x for x in (_lire_json(_fichier_chaines(mbid)) or []) if x["id"] != cid])
+    _ecrire_chaines_toi(mbid, [x for x in _sources_toi(mbid) if x["id"] != cid])
     return jsonify({"ok": True, "chaines": _chaines_officielles(mbid)})
 
 

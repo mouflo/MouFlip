@@ -73,10 +73,12 @@ def chercher_groupes(nom: str, limite: int = 6) -> list[dict]:
 
 
 def fiche_mb(mbid: str) -> dict:
-    d = _get(f"{MB}/artist/{mbid}", {"inc": "aliases+tags+url-rels", "fmt": "json"}) or {}
-    liens, youtube = {}, []
+    d = _get(f"{MB}/artist/{mbid}", {"inc": "aliases+tags+url-rels+artist-rels", "fmt": "json"}) or {}
+    liens, youtube, parents = {}, [], []
     for r in d.get("relations", []):
         u = (r.get("url") or {}).get("resource", "")
+        if r.get("type") == "member of band" and r.get("direction") == "forward" and not r.get("ended") and (r.get("artist") or {}).get("id"):
+            parents.append({"id": r["artist"]["id"], "nom": r["artist"].get("name", "")})      # le groupe dont cet artiste est membre (YUQI → i-dle)
         if r.get("type") == "youtube" and u:
             youtube.append(u)                                        # chaîne(s) YouTube officielle(s) connue(s) de MusicBrainz
         if r.get("type") == "wikidata":
@@ -87,7 +89,7 @@ def fiche_mb(mbid: str) -> dict:
             liens["wikipedia"] = u
     return {"mbid": d.get("id", mbid), "nom": d.get("name", ""), "type": d.get("type", ""), "pays": d.get("country", ""),
             "debut": ((d.get("life-span") or {}).get("begin") or "")[:4], "alias": [a["name"] for a in d.get("aliases", []) if a.get("name")],
-            "genres": [t["name"] for t in sorted(d.get("tags", []), key=lambda t: -t.get("count", 0))][:5], "liens": liens, "youtube": youtube}
+            "genres": [t["name"] for t in sorted(d.get("tags", []), key=lambda t: -t.get("count", 0))][:5], "liens": liens, "youtube": youtube, "parents": parents[:3]}
 
 
 def images_audiodb(mbid: str) -> dict:
@@ -264,7 +266,7 @@ def clips_mb(mbid: str, nom_groupe: str, decouverte=None) -> list[dict]:
                 c["annee"] = annee
             return
         candidats[n] = {"titre": titre.strip(), "album": album or titre.strip(), "annee": annee, "mbid": mb_id, "type": "clip", "source": source, "duree": duree, "rg": rg,
-                         "video_id": video_id}
+                         "video_id": video_id, "date": date or ""}
 
     # (1) vidéos répertoriées par MusicBrainz
     offset = 0
@@ -290,7 +292,7 @@ def clips_mb(mbid: str, nom_groupe: str, decouverte=None) -> list[dict]:
     if decouverte:
         try:
             for d in decouverte(set(pistes)):
-                ajouter(d["titre"], "", "", "youtube", "", d.get("duree", 0), "", d["video_id"])
+                ajouter(d["titre"], "", d.get("date", ""), "youtube", "", d.get("duree", 0), "", d["video_id"])
         except Exception:
             pass
     sortie = sorted(candidats.values(), key=lambda c: (c["annee"] or "9999", normaliser(c["titre"])))

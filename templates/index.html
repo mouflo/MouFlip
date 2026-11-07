@@ -141,6 +141,8 @@
     .barre-clips .btn#telecharger { flex:1; padding:11px 14px; }
     @media (min-width:600px) { .barre-clips .resume { flex:1 1 auto; } .barre-clips .btn#telecharger { flex:none; } }
     .chaine { margin:4px 0; font-size:.9rem; word-break:break-word; }
+    .clip.nouveau { animation: nouveau 4s ease-out; border-radius:8px; }
+    @keyframes nouveau { 0%, 60% { background:rgba(82,181,75,.28); } 100% { background:transparent; } }
     .progress { background:var(--field); border-radius:6px; height:30px; position:relative; overflow:hidden; display:none; margin:8px 0; }
     .progress.show { display:block; }
     .progress .bar { background:var(--accent); height:100%; width:0; transition:width .4s; }
@@ -238,10 +240,10 @@ function dessiner() {
             </div></div>
         ${G.biographie ? `<div class="bio" id="bio">${esc(G.biographie)}</div><a href="#" id="bioPlus" class="muted">Lire la suite</a>` : ''}
         ${(G.erreurs || []).map(e => `<div class="note warn">⚠️ ${esc(e)}</div>`).join('')}
-        <details class="ajout" id="chainesBloc"><summary>📺 Chaînes YouTube officielles (${(G.chaines || []).length})</summary>
-            <div class="aide" style="margin:8px 0">Une vidéo publiée par une de ces chaînes est reconnue « officielle », et leurs vidéos servent à retrouver des clips. MusicBrainz en connaît souvent ; ajoute la chaîne du label si besoin.</div>
-            <div id="chainesListe">${(G.chaines || []).map(ch => `<div class="chaine"><a href="${esc(ch.url)}" target="_blank" rel="noopener">📺 ${esc(ch.nom || ch.id)}</a> <span class="pill">${esc(ch.source)}</span>${ch.source === 'toi' ? ` <a href="#" data-retirer-chaine="${esc(ch.id)}">✕ retirer</a>` : ''}</div>`).join('') || '<div class="muted">Aucune chaîne connue pour ce groupe.</div>'}</div>
-            <div class="search-row" style="margin-top:8px"><input type="text" id="chaineLien" placeholder="https://www.youtube.com/@… ou …/channel/UC…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="chaineAjouter">➕ Ajouter</button></div>
+        <details class="ajout" id="chainesBloc"><summary>📺 Sources officielles : chaînes et playlists YouTube (${(G.chaines || []).length})</summary>
+            <div class="aide" style="margin:8px 0">Une vidéo publiée par une de ces chaînes est reconnue « officielle », et leurs vidéos servent à retrouver des clips. Une <b>playlist</b> officielle (par exemple « Music Videos » d'une chaîne) est encore mieux : c'est la liste exacte des clips. Un artiste solo reprend les sources de son groupe (YUQI → i-dle). MusicBrainz en connaît souvent ; ajoute celle du label ou une playlist si besoin.</div>
+            <div id="chainesListe">${(G.chaines || []).map(ch => `<div class="chaine"><a href="${esc(ch.url)}" target="_blank" rel="noopener">${ch.type === 'playlist' ? '🎞️ Playlist' : '📺 Chaîne'} · ${esc(ch.nom || ch.id)}</a> <span class="pill">${esc(ch.source)}</span>${ch.source === 'toi' ? ` <a href="#" data-retirer-chaine="${esc(ch.id)}">✕ retirer</a>` : ''}</div>`).join('') || '<div class="muted">Aucune chaîne connue pour ce groupe.</div>'}</div>
+            <div class="search-row" style="margin-top:8px"><input type="text" id="chaineLien" placeholder="Adresse d’une chaîne (…/@nom, …/channel/UC…) ou d’une playlist (…/playlist?list=PL…)" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="chaineAjouter">➕ Ajouter</button></div>
             <div id="chaineMsg"></div>
         </details>
     </div>
@@ -275,6 +277,7 @@ function dessiner() {
     $('clips').addEventListener('change', e => { if (e.target.type === 'checkbox') majCoches(); });
     majCoches();
     if ($('actualiser')) $('actualiser').onclick = e => { e.preventDefault(); ouvrir(G.fiche.mbid, true); };
+    document.querySelectorAll('[data-corriger]').forEach(a => a.onclick = e => { e.preventDefault(); corrigerClip(Number(a.dataset.corriger)); });
     document.querySelectorAll('[data-retirer-ajout]').forEach(a => a.onclick = async e => { e.preventDefault(); await post('/api/ajout/retirer', {mbid: G.fiche.mbid, titre: a.dataset.retirerAjout}); ouvrir(G.fiche.mbid); });
     document.querySelectorAll('[data-red]').forEach(sel => sel.onchange = () => choisirReduction([document.querySelectorAll('.clip')[Number(sel.dataset.red)].dataset.t], sel.value));
     $('redTous').onchange = async () => {
@@ -288,11 +291,11 @@ function dessiner() {
     if ($('chaineAjouter')) {
         $('chaineAjouter').onclick = async () => {
             const lien = $('chaineLien').value.trim(); if (!lien) return;
-            $('chaineMsg').innerHTML = '<div class="muted" style="margin-top:6px">Lecture de la chaîne…</div>';
+            $('chaineMsg').innerHTML = '<div class="muted" style="margin-top:6px">Lecture de l’adresse…</div>';
             const r = await post('/api/chaines/ajouter', {mbid: G.fiche.mbid, lien});
             if (!r.ok) { $('chaineMsg').innerHTML = `<div class="note err">${esc(r.error || 'Ajout impossible.')}</div>`; return; }
             const mbid = G.fiche.mbid; await ouvrir(mbid, true);               // la liste est refaite : on y cherche les clips de cette chaîne
-            note(`Chaîne « ${r.chaine.nom} » ajoutée : la liste des clips est mise à jour.`);
+            note(`« ${r.chaine.nom} » ajoutée : la liste des clips est mise à jour.`);
         };
         document.querySelectorAll('[data-retirer-chaine]').forEach(a => a.onclick = async e => { e.preventDefault(); const r = await post('/api/chaines/retirer', {mbid: G.fiche.mbid, id: a.dataset.retirerChaine}); G.chaines = r.chaines || []; dessiner(); });
     }
@@ -314,15 +317,19 @@ function ligne(c, i) {
         <div><span class="t">${esc(c.titre)}</span> <span class="muted">${esc(c.album)}${c.annee ? ' · ' + esc(c.annee) : ''}</span>
         ${c.deja ? '<span class="pill ok">✅ déjà dans la médiathèque</span>' : '<span class="pill">⬇️ à prendre</span>'}
         ${c.source === 'video' ? '<span class="pill" title="MusicBrainz connaît une vidéo pour ce titre">🎞️ vidéo connue</span>' : c.source === 'youtube' ? '<span class="pill" title="Trouvé sur YouTube et reconnu comme un morceau de l’album">▶️ trouvé sur YouTube</span>' : c.source === 'ajout' ? '<span class="pill ok" title="Ajouté à la main">➕ ajouté par toi</span>' : '<span class="pill warn" title="Single ou titre-phare : la vidéo officielle est à vérifier sur YouTube">à vérifier sur YouTube</span>'}</div>
-        ${c.source === 'ajout' ? `<div class="chemin"><a href="#" data-retirer-ajout="${esc(c.titre)}">✕ Retirer ce clip ajouté à la main</a></div>` : ''}
+        <div class="chemin"><a href="#" data-corriger="${i}">✏️ Corriger l’album ou l’année</a>${c.source === 'ajout' ? ` · <a href="#" data-retirer-ajout="${esc(c.titre)}">✕ Retirer ce clip ajouté à la main</a>` : ''}</div>
         <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
         <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div>
         <div class="voir"><label class="red">📉 Taille : <select data-red="${i}">${optionsReduction(RD[c.titre] || 'defaut')}</select></label> <button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''} <span id="qp${i}">${Q[c.titre] ? '<span class="pill ok">qualité choisie : ' + esc(Q[c.titre].texte) + '</span>' : ''}</span><div id="voir${i}"></div></div></div>`;
 }
-const NOMS_RED = {defaut: 'Selon le réglage', non: 'Ne pas réduire', tres_peu_de_perte: 'Très peu de perte (≈ 60 %)', leger: 'Équilibré (≈ 50 %)', plus_petit: 'Plus petit (≈ 35 %)'};
-function optionsReduction(cur) {
+const NOMS_RED = {defaut: 'Selon le réglage', non: 'Ne pas réduire', tres_peu_de_perte: 'Très peu de perte (≈ 70 %)', leger: 'Équilibré (≈ 60 %)', plus_petit: 'Plus petit (≈ 40 %)'};
+const RATIO_RED = {tres_peu_de_perte: 0.70, leger: 0.60, plus_petit: 0.40};          // part de la taille d'origine, mesurée sur des clips entiers
+function optionsReduction(cur, tailleBase) {                          // tailleBase (octets) : affiche la taille probable de chaque niveau
     const general = REDGEN.actif ? 'réglage actuel : réduit' : 'réglage actuel : pas de réduction';
-    return Object.entries(NOMS_RED).map(([v, t]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'defaut' ? t + ' (' + general + ')' : t}</option>`).join('');
+    return Object.entries(NOMS_RED).map(([v, t]) => {
+        const est = tailleBase && RATIO_RED[v] ? ' · ~' + taille(tailleBase * RATIO_RED[v]) : (tailleBase && v === 'non' ? ' · ' + taille(tailleBase) : '');
+        return `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'defaut' ? t + ' (' + general + ')' : t + est}</option>`;
+    }).join('');
 }
 async function choisirReduction(titres, mode) {
     const r = await post('/api/choix_reduction', {mbid: G.fiche.mbid, titres, mode});
@@ -420,16 +427,47 @@ async function ajoutLire() {
     const d = await post('/api/ajout/analyser', {mbid: G.fiche.mbid, lien});
     if (d.error) { $('ajoutForm').innerHTML = `<div class="note err">${esc(d.error)}</div>`; return; }
     $('ajoutForm').innerHTML = `<div class="note">🎬 « ${esc(d.titre_video)} » · ${esc(d.chaine)} · ${dur(d.duree)}</div>
+        <div class="note" id="ajoutTaille">📊 Lecture du format et de la taille…</div>
         <label class="champ">Titre du clip<input type="text" id="ajoutTitre" value="${esc(d.titre)}"></label>
         <label class="champ">Album (le dossier où il sera rangé)<input type="text" id="ajoutAlbum" list="ajoutAlbums" value="${esc(d.album_suggere)}"></label>
         <datalist id="ajoutAlbums">${d.albums.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
         <label class="champ">Année<input type="text" id="ajoutAnnee" inputmode="numeric" maxlength="4" value="${esc(d.annee)}"></label>
-        <button class="btn" id="ajoutOk">✅ Ajouter à la liste</button>`;
-    $('ajoutOk').onclick = async () => {
-        const r = await post('/api/ajout/confirmer', {mbid: G.fiche.mbid, titre: $('ajoutTitre').value, album: $('ajoutAlbum').value, annee: $('ajoutAnnee').value, video_id: d.video_id});
+        <label class="red champ">📉 Taille du fichier : <select id="ajoutRed">${optionsReduction('defaut', 0)}</select></label>
+        <div class="toolbar"><button class="btn ghost" id="ajoutOk">✅ Ajouter à la liste</button><button class="btn" id="ajoutDl">⬇️ Ajouter et télécharger</button></div>`;
+    post('/api/apercu/version', {video_id: d.video_id}).then(v => {                // taille réelle de ce qu'on téléchargerait + taille probable de chaque niveau
+        if (!$('ajoutTaille')) return;
+        if (v.etat !== 'ok') { $('ajoutTaille').innerHTML = `⚠️ ${esc(v.erreur || 'format illisible')}`; return; }
+        const f = v.format;
+        $('ajoutTaille').innerHTML = `📊 <b>${esc(f.resolution)}</b> ${esc(f.codec)} ${f.debit_kbps} kb/s · son ${f.audio_aac ? 'AAC ' + f.audio_aac.debit_kbps + ' kb/s' : '(pas d’AAC)'} · <b>${taille(v.taille)}</b> (image + son)`;
+        const cur = $('ajoutRed').value; $('ajoutRed').innerHTML = optionsReduction(cur, v.taille);
+    });
+    const valider = async (telecharger) => {
+        const titre = $('ajoutTitre').value.trim(), mode = $('ajoutRed').value;
+        const r = await post('/api/ajout/confirmer', {mbid: G.fiche.mbid, titre, album: $('ajoutAlbum').value, annee: $('ajoutAnnee').value, video_id: d.video_id});
         if (!r.ok) { $('ajoutForm').insertAdjacentHTML('beforeend', `<div class="note err">${esc(r.error || 'Ajout impossible.')}</div>`); return; }
-        const mbid = G.fiche.mbid; await ouvrir(mbid); note('Clip ajouté : « ' + $('ajoutTitre')?.value + ' » est dans la liste.');
+        if (mode !== 'defaut') await post('/api/choix_reduction', {mbid: G.fiche.mbid, titres: [titre], mode});
+        const mbid = G.fiche.mbid; await ouvrir(mbid);
+        selectionnerSeul(titre);                                                      // le clip ajouté est coché (et lui seul), visible, prêt à télécharger
+        if (telecharger) telechargerCoches(); else note(`« ${titre} » est ajouté et coché : il est dans la liste, en surbrillance.`);
     };
+    $('ajoutOk').onclick = () => valider(false);
+    $('ajoutDl').onclick = () => valider(true);
+}
+function selectionnerSeul(titre) {
+    const lignes = [...document.querySelectorAll('.clip')];
+    lignes.forEach(el => { el.querySelector('input[type=checkbox]').checked = el.dataset.t === titre; });
+    majCoches();
+    const cible = lignes.find(el => el.dataset.t === titre);
+    if (cible) { cible.scrollIntoView({behavior: 'smooth', block: 'center'}); cible.classList.add('nouveau'); setTimeout(() => cible.classList.remove('nouveau'), 4000); }
+}
+async function corrigerClip(i) {                                                        // « ✏️ Corriger l'album ou l'année » : rouvre le formulaire d'ajout avec les valeurs du clip
+    const c = filtreClips()[i]; if (!c) return;
+    const bloc = $('ajoutBloc'); bloc.open = true;
+    if (!c.video_id) { $('ajoutLien').value = ''; $('ajoutLien').focus(); note('Colle le lien YouTube de ce clip pour pouvoir corriger son album et son année.', 'warn'); bloc.scrollIntoView({behavior: 'smooth'}); return; }
+    $('ajoutLien').value = 'https://www.youtube.com/watch?v=' + c.video_id;
+    await ajoutLire();
+    if ($('ajoutTitre')) { $('ajoutTitre').value = c.titre; $('ajoutAlbum').value = c.album; $('ajoutAnnee').value = c.annee || ''; }
+    bloc.scrollIntoView({behavior: 'smooth'});
 }
 async function lireFormats() {
     const titres = [...document.querySelectorAll('.clip')].filter(el => el.querySelector('input').checked).map(el => el.dataset.t);

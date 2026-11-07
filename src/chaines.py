@@ -46,6 +46,64 @@ def resoudre(url: str, extraire=None) -> dict:
     return {"id": cid, "nom": i.get("channel") or i.get("uploader") or i.get("title") or cid, "url": f"https://www.youtube.com/channel/{cid}"}
 
 
+RE_PLAYLIST = re.compile(r"[?&]list=((?:PL|UU|OLAK5uy_)[\w-]{10,64})")
+ID_PLAYLIST = re.compile(r"(?:PL|UU|OLAK5uy_)[\w-]{10,64}")
+
+
+def resoudre_source(url: str, extraire=None) -> dict:
+    """Une chaîne OU une playlist YouTube : {type: « chaine » | « playlist », id, nom, url, channel_id}. Une playlist (par exemple « Music Videos » d'une
+    chaîne officielle) est la liste exacte des clips : bien plus fiable qu'une recherche. Les « mix » automatiques (list=RD…) ne sont pas des playlists."""
+    url = (url or "").strip()
+    m = RE_PLAYLIST.search(url)
+    if m and "/playlist" in url:
+        from yt_dlp import YoutubeDL
+        from src import ytcookies
+        extraire = extraire or (lambda u, o: YoutubeDL(o).extract_info(u, download=False))
+        o = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True, "playlistend": 1, "socket_timeout": 25}
+        o.update(ytcookies.opts())
+        try:
+            i = extraire(f"https://www.youtube.com/playlist?list={m.group(1)}", o) or {}
+        except Exception as e:
+            raise ChaineError(f"YouTube ne donne pas cette playlist : {str(e)[:140]}")
+        return {"type": "playlist", "id": m.group(1), "nom": i.get("title") or m.group(1), "url": f"https://www.youtube.com/playlist?list={m.group(1)}",
+                "channel_id": i.get("channel_id") or "", "chaine": i.get("channel") or i.get("uploader") or ""}
+    ch = resoudre(url, extraire)
+    return {"type": "chaine", **ch}
+
+
+def videos_playlist(playlist_id: str, extraire=None, max_videos: int = 300) -> list[dict]:
+    """Les vidéos d'une playlist (liste légère). [] si YouTube ne répond pas. Chaque vidéo garde la chaîne qui l'a publiée."""
+    from yt_dlp import YoutubeDL
+    from src import ytcookies
+    extraire = extraire or (lambda u, o: YoutubeDL(o).extract_info(u, download=False))
+    o = {"quiet": True, "no_warnings": True, "extract_flat": True, "skip_download": True, "playlistend": max_videos, "socket_timeout": 25}
+    o.update(ytcookies.opts())
+    try:
+        i = extraire(f"https://www.youtube.com/playlist?list={playlist_id}", o) or {}
+    except Exception as e:
+        logger.warning("Playlist %s illisible : %s", playlist_id, e)
+        return []
+    return [e for e in (i.get("entries") or []) if e and e.get("id")]
+
+
+def contient_nom(titre: str, noms) -> bool:
+    """Le titre de la vidéo porte-t-il le nom de l'artiste (ou un de ses alias) ? Tolère les tirets et parenthèses différents (« i‐dle » / « (G)I-DLE »).
+    Un nom court (moins de 4 lettres ou chiffres) doit être un mot entier."""
+    def plat(x):
+        return re.sub(r"[^\w]", "", re.sub(r"[‐‑‒–—−]", "-", x or "").lower(), flags=re.UNICODE)
+    t_plat, t = plat(titre), re.sub(r"[‐‑‒–—−]", "-", (titre or "").lower())
+    for n in noms or []:
+        p = plat(n)
+        if not p:
+            continue
+        if len(p) >= 4:
+            if p in t_plat:
+                return True
+        elif re.search(r"(?<!\w)" + re.escape(re.sub(r"[‐‑‒–—−]", "-", n.lower())) + r"(?!\w)", t):
+            return True
+    return False
+
+
 def videos(chaine_id: str, extraire=None, max_videos: int = 200) -> list[dict]:
     """Les vidéos récentes de la chaîne (liste légère : titre, id, durée). [] si YouTube ne répond pas."""
     from yt_dlp import YoutubeDL

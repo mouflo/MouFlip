@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Ce qui n'est JAMAIS le clip officiel : répétitions de danse, extraits, paroles, concerts, lives, émissions de télévision, coulisses, réactions…
 # (un seul de ces mots dans le titre suffit à écarter la vidéo)
 _PAS_LE_CLIP = re.compile(r"\b(dance\s*practice|choreograph\w*|teaser|trailer|lyrics?|reaction|live|stage|stages|performance|behind|making|"
-                          r"cover|remix|instrumental|audio|karaoke|fancam|shorts?|highlight|medley|preview|snippet|concert|tour|festival|awards?|"
+                          r"cover|remix|instrumental|audio|karaoke|fancam|shorts?|highlight|medley|preview|snippet|visuali[sz]er|concert|tour|festival|awards?|"
                           r"countdown|inkigayo|music\s*bank|show\s*champion|the\s*show|first\s*take|kcon|interview|special|episode|ep\.?\s*\d+|"
                           r"jacket|photoshoot|camerawork|guide|sped\s*up|slowed|mashup|version|ver\.|recap|vlog|fan\s*made|mirrored|dance\s*break)\b|"
                           r"[#＃]|\u2022", re.I)
@@ -135,7 +135,7 @@ def titre_du_clip(titre_video: str, groupe: str) -> str:
     return " ".join(t.split()).strip(" -–—_|")
 
 
-def decouvrir(groupe: str, pistes: set, extraire=None, chaines=(), videos_chaine=None) -> list[dict]:
+def decouvrir(groupe: str, pistes: set, extraire=None, chaines=(), videos_chaine=None, playlists=(), videos_playlist=None, noms=()) -> list[dict]:
     """Clips officiels trouvés SUR YOUTUBE (une recherche) dont le titre est un morceau des albums du groupe (recoupement avec `pistes`, des titres
     normalisés). Pour les groupes que MusicBrainz connaît mal (titres-phares d'EP sans clip répertorié). Retourne [{titre, video_id, chaine, officielle}]."""
     from yt_dlp import YoutubeDL
@@ -145,27 +145,47 @@ def decouvrir(groupe: str, pistes: set, extraire=None, chaines=(), videos_chaine
     except Exception as e:
         logger.warning("Découverte YouTube impossible pour %s : %s", groupe, e)
         return []
-    entrees = list(r.get("entries") or [])
+    from src import chaines as _chaines
+    entrees = [(e, False) for e in (r.get("entries") or [])]          # (vidéo, vient d'une source officielle ?)
     if chaines:                                              # + les vidéos des chaînes officielles (la chaîne du groupe, celle de son label)
-        from src import chaines as _chaines
         lire = videos_chaine or (lambda cid: _chaines.videos(cid))
         for cid in chaines:
-            entrees += lire(cid)
+            entrees += [(e, True) for e in lire(cid)]
+    for pid in playlists:                                    # + les playlists officielles (« Music Videos » d'une chaîne officielle)
+        lire = videos_playlist or (lambda x: _chaines.videos_playlist(x))
+        entrees += [(e, True) for e in lire(pid)]
+    noms = list(noms) or [groupe]
     meilleurs = {}
-    for e in entrees:
+    for e, officiel in entrees:
         if not e or not e.get("id"):
             continue
         titre = titre_du_clip(e.get("title") or "", groupe)
         n = normaliser(titre)
-        if not n or n not in pistes:
+        # recherche libre : le titre doit être un morceau des albums (MusicBrainz). Source officielle : le titre doit porter le nom de l'artiste et être un
+        # clip (MV / Official Music Video) — MusicBrainz ne liste pas toujours les morceaux d'un EP solo ; la playlist officielle, elle, est fiable.
+        if not n:
             continue
+        if n not in pistes:
+            if not (officiel and _chaines.contient_nom(e.get("title") or "", noms) and _BON_SIGNE.search(e.get("title") or "")):
+                continue
         note = _note(e, groupe, titre, chaines)
         if note < 40:                                         # live, émission, fan… ou titre absent : jamais
             continue
-        officielle = note >= SEUIL_OFFICIEL or (e.get("channel_id") in chaines)
+        officielle = note >= SEUIL_OFFICIEL or (e.get("channel_id") in chaines) or (officiel and not e.get("channel_id"))
         if n not in meilleurs or note > meilleurs[n]["note"]:
             meilleurs[n] = {"titre": titre.strip(), "video_id": e["id"], "chaine": e.get("channel") or e.get("uploader") or "", "note": note,
-                            "officielle": officielle, "duree": e.get("duration") or 0}
+                            "officielle": officielle, "duree": e.get("duration") or 0, "connu_mb": n in pistes}
+    # Un clip reconnu sur la foi d'une source officielle (et pas dans les morceaux de MusicBrainz) n'a ni album ni année : on lit sa date de mise en ligne
+    # (une requête chacun, 12 au plus) pour que l'appli propose l'album sorti à cette date.
+    sans_album = [m for m in sorted(meilleurs.values(), key=lambda x: -x["note"]) if not m["connu_mb"]][:12]
+    for m in sans_album:
+        try:
+            infos = extraire(f"https://www.youtube.com/watch?v={m['video_id']}", _options()) or {}
+            d = infos.get("upload_date") or ""
+            if len(d) == 8:
+                m["date"] = f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        except Exception:
+            pass
     return sorted(meilleurs.values(), key=lambda x: -x["note"])
 
 

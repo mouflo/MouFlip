@@ -138,7 +138,7 @@ def images_extraites(fichier_video, dossier, combien: int = 4) -> list[dict]:
 # ----------------------------------------------------------------------------------------------------------------------------------------
 # Réduire la taille : l'image est réencodée en VP9 (le codec de tes clips actuels) à qualité constante ; le son est recopié tel quel.
 # Mesuré sur LEMONADE (3 passages de 20 s, SSIM image par image) : crf 30 = 50 à 53 % de la taille d'origine, qualité égale à l'AV1 de YouTube
-# (SSIM 0,988-0,993) ; crf 27 = 61 % (SSIM 0,994) ; crf 34 = 41 % ; crf 38 = 32 %. Environ 8 images/s sur 8 cœurs : ~10 min pour un clip 4K de 3 min.
+# (SSIM 0,988-0,993) ; crf 27 = 61 % (SSIM 0,994) ; crf 34 = 41 % ; crf 38 = 32 %. Sur CLIPS ENTIERS crf 30 donne 60 à 63 % (242 → 145 Mo, 356 → 224 Mo). Environ 8 images/s sur 8 cœurs : ~10 min pour un clip 4K de 3 min.
 # ----------------------------------------------------------------------------------------------------------------------------------------
 CRF_REDUCTION = {"leger": 30, "tres_peu_de_perte": 27, "plus_petit": 36}
 MEMOIRE_MIN_GO = 2.5

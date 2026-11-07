@@ -467,6 +467,21 @@ class RoutesTest(unittest.TestCase):
             self.assertEqual(bad.status_code, 400)
             self.assertIn("chaîne YouTube", bad.get_json()["error"])
 
+    def test_artiste_solo_herite_des_sources_de_son_groupe(self):
+        par = "0068ae6c-7156-40f9-a81f-39294af6a549"
+        fich = self.A.CACHE_DIR / "groupes" / f"{self.MB}.json"
+        fich.parent.mkdir(parents=True, exist_ok=True)
+        fich.write_text(json.dumps({"fiche": {"nom": "YUQI", "parents": [{"id": par, "nom": "i‐dle"}]}, "clips": [], "chaines_mb": [],
+                                    "chaines_parents": [{"id": "UCritGVo7pLJLUS8wEu32vow", "nom": "i-dle", "url": "u", "parent": "i‐dle", "parent_id": par}]}))
+        parent_toi = [{"type": "playlist", "id": "PLG8DKAYW6M264immTa4KjaGkYBF1FHJ5X", "nom": "Music Videos", "url": "u", "channel_id": "UCritGVo7pLJLUS8wEu32vow"}]
+        with mock.patch.object(self.A, "_fichier_chaines", side_effect=lambda m: Path(self.tmp.name) / f"{m}.json"):
+            (Path(self.tmp.name) / f"{par}.json").write_text(json.dumps(parent_toi))              # la playlist a été ajoutée sur la page du GROUPE
+            liste = self.A._chaines_officielles(self.MB)
+        self.assertEqual([(x["type"], x["source"]) for x in liste], [("chaine", "MusicBrainz, groupe i‐dle"), ("playlist", "toi, groupe i‐dle")])
+        with mock.patch.object(self.A, "_fichier_chaines", side_effect=lambda m: Path(self.tmp.name) / f"{m}.json"):
+            self.assertEqual(self.A._ids_chaines(self.MB), {"UCritGVo7pLJLUS8wEu32vow"})
+            self.assertEqual(self.A._ids_playlists(self.MB), ["PLG8DKAYW6M264immTa4KjaGkYBF1FHJ5X"])
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)
@@ -630,6 +645,68 @@ class ChainesTest(unittest.TestCase):
                   {"id": "eeeeeeeeeee", "title": "VIVIZ WORLD TOUR 'NEW LEGACY' LOG EP.08", "channel": "VIVIZ", "channel_id": self.CID, "duration": 900}]
         r = formats.decouvrir("VIVIZ", {"love love love"}, lambda q, o: {"entries": []}, chaines={self.CID}, videos_chaine=lambda cid: videos)
         self.assertEqual([(x["titre"], x["video_id"], x["officielle"]) for x in r], [("Love Love Love", "ccccccccccc", True)])
+
+
+class SourcesOfficiellesTest(unittest.TestCase):
+    PL = "PLG8DKAYW6M264immTa4KjaGkYBF1FHJ5X"
+    IDLE = "UCritGVo7pLJLUS8wEu32vow"
+
+    def test_playlist_reconnue_mais_pas_un_mix_ni_une_video(self):
+        from src import chaines
+        r = chaines.resoudre_source(f"https://www.youtube.com/playlist?list={self.PL}",
+                                    extraire=lambda u, o: {"title": "Music Videos", "channel": "i-dle (아이들)", "channel_id": self.IDLE})
+        self.assertEqual((r["type"], r["id"], r["nom"], r["channel_id"]), ("playlist", self.PL, "Music Videos", self.IDLE))
+        with self.assertRaises(chaines.ChaineError):                                                # un « mix » automatique n'est pas une playlist
+            chaines.resoudre_source("https://www.youtube.com/watch?v=AE8yKldv_oo&list=RD83C3TZ4Zm_o&index=10", extraire=lambda u, o: {})
+        r = chaines.resoudre_source("https://www.youtube.com/@x", extraire=lambda u, o: {"channel": "x", "channel_id": self.IDLE})
+        self.assertEqual(r["type"], "chaine")
+
+    def test_nom_de_l_artiste_dans_un_titre(self):
+        from src.chaines import contient_nom
+        self.assertTrue(contient_nom("우기 (YUQI) - 'Bonnie & Clyde' Official Music Video", ["YUQI", "우기"]))
+        self.assertTrue(contient_nom("(여자)아이들((G)I-DLE) - 'Queencard' Official Music Video", ["i‐dle", "(G)I-DLE"]))   # tiret différent
+        self.assertFalse(contient_nom("MINNIE 'to the moon :)' Official Music Video", ["YUQI", "우기"]))
+        self.assertFalse(contient_nom("Superstar remix", ["IU"]))                                           # nom court : mot entier seulement
+        self.assertTrue(contient_nom("IU - Celebrity MV", ["IU"]))
+
+    def test_playlist_officielle_donne_les_clips_solo_meme_sans_morceau_connu_de_musicbrainz(self):
+        """Cas YUQI : « Bonnie & Clyde » n'est pas dans les morceaux de MusicBrainz, mais la playlist « Music Videos » d'i-dle le publie."""
+        entrees = [{"id": "AE8yKldv_oo", "title": "우기 (YUQI) - 'Bonnie & Clyde' Official Music Video", "channel": "i-dle (아이들)", "channel_id": self.IDLE, "duration": 214},
+                   {"id": "bbbbbbbbbbb", "title": "MINNIE 'to the moon :)' Official Music Video", "channel": "i-dle (아이들)", "channel_id": self.IDLE, "duration": 236},
+                   {"id": "ccccccccccc", "title": "YUQI 'Stay' Official Music Video", "channel": "i-dle (아이들)", "channel_id": self.IDLE, "duration": 234},
+                   {"id": "ddddddddddd", "title": "우기 (YUQI) - 'Freak' Official Lyric Video", "channel": "i-dle (아이들)", "channel_id": self.IDLE, "duration": 190},
+                   {"id": "eeeeeeeeeee", "title": "우기 (YUQI) 'Giant' Official Music Video", "channel": "Autre", "channel_id": "UCautre0000000000000000", "duration": 212}]
+        r = formats.decouvrir("YUQI", {"stay"}, lambda q, o: {"entries": []}, chaines={self.IDLE}, videos_chaine=lambda cid: [], playlists=[self.PL], videos_playlist=lambda pid: entrees, noms=["YUQI", "우기"])
+        self.assertEqual(sorted(x["titre"] for x in r), ["Bonnie & Clyde", "Giant", "Stay"])             # pas MINNIE (autre artiste), pas la vidéo de paroles
+        self.assertTrue(next(x for x in r if x["titre"] == "Bonnie & Clyde")["officielle"])
+        self.assertEqual(next(x for x in r if x["titre"] == "Bonnie & Clyde")["video_id"], "AE8yKldv_oo")
+
+    def test_date_de_mise_en_ligne_lue_pour_les_clips_sans_morceau_connu(self):
+        entrees = [{"id": "AE8yKldv_oo", "title": "우기 (YUQI) - 'Bonnie & Clyde' Official Music Video", "channel": "i-dle", "channel_id": self.IDLE, "duration": 214}]
+        def extraire(q, o):
+            return {"entries": []} if str(q).startswith("ytsearch") else {"upload_date": "20210520"}
+        r = formats.decouvrir("YUQI", {"stay"}, extraire, chaines={self.IDLE}, videos_chaine=lambda cid: [], playlists=[self.PL], videos_playlist=lambda pid: entrees, noms=["YUQI"])
+        self.assertEqual(r[0]["date"], "2021-05-20")
+
+    def test_album_propose_d_apres_la_date(self):
+        import app as A
+        rgs = [{"id": "ep", "titre": "A Page", "type": "EP", "date": "2021-05-20"}, {"id": "s", "titre": "Bonnie & Clyde", "type": "Single", "date": "2021-05-20"},
+               {"id": "x", "titre": "YUQ1", "type": "Album", "date": "2024-01-15"}]
+        self.assertEqual(A._proposer_album(rgs, "20210520"), ("A Page", "ep"))              # l'EP du jour avant le single du même jour
+        self.assertEqual(A._proposer_album(rgs, "2021-05-25"), ("A Page", "ep"))
+        self.assertEqual(A._proposer_album(rgs, "20230101"), ("", ""))                       # rien d'assez proche
+        self.assertEqual(A._proposer_album(rgs, ""), ("", ""))
+
+    def test_recherche_libre_exige_toujours_un_morceau_connu(self):
+        e = {"id": "fffffffffff", "title": "YUQI - 'Inconnu' MV", "channel": "Chaîne quelconque", "channel_id": "UCx00000000000000000000", "duration": 200}
+        self.assertEqual(formats.decouvrir("YUQI", {"stay"}, lambda q, o: {"entries": [e]}, noms=["YUQI"]), [])
+
+    def test_musicbrainz_groupe_dont_l_artiste_est_membre(self):
+        art = {"id": "x", "name": "YUQI", "relations": [{"type": "member of band", "direction": "forward", "ended": False, "artist": {"id": "0068ae6c-7156-40f9-a81f-39294af6a549", "name": "i‐dle"}},
+                                                         {"type": "member of band", "direction": "backward", "artist": {"id": "zzz", "name": "Un membre"}},
+                                                         {"type": "member of band", "direction": "forward", "ended": True, "artist": {"id": "old", "name": "Ancien groupe"}}]}
+        with mock.patch.object(sources, "_get", return_value=art):
+            self.assertEqual(sources.fiche_mb("x")["parents"], [{"id": "0068ae6c-7156-40f9-a81f-39294af6a549", "nom": "i‐dle"}])
 
 
 class DecouverteTest(unittest.TestCase):
