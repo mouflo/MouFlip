@@ -71,6 +71,18 @@ def _fichier_choix() -> Path:
     return _CFG["dossier"].parent / "choix_images.json"
 
 
+def reduction_voulue(c) -> tuple[bool, int]:
+    """(réduire ?, niveau crf) pour CE clip : « non » = jamais ; un niveau choisi pour le clip = oui à ce niveau, même si le réglage général est coupé ;
+    « defaut » (ou rien) = le réglage général de ⚙️ Réglages."""
+    mode = c.get("reduction_mode") or "defaut"
+    if mode == "non":
+        return False, 0
+    if mode in telechargement.CRF_REDUCTION:
+        return True, telechargement.CRF_REDUCTION[mode]
+    red = _CFG["reduction"]()
+    return bool(red.get("actif")), int(red.get("crf", 30))
+
+
 def _choix_groupe(mbid) -> dict:
     try:
         return json.loads(_fichier_choix().read_text(encoding="utf-8")).get(mbid, {})
@@ -95,7 +107,7 @@ def ajouter(groupe: dict, clip: dict) -> dict:
         tid = uuid.uuid4().hex[:10]
         c = {"id": tid, "cree": time.time(), "groupe": groupe["nom"], "titre": clip["titre"], "album": clip["album"], "annee": clip.get("annee", ""),
              "mbid_clip": clip.get("mbid", ""), "rg": clip.get("rg", ""), "video_id": clip.get("video_id", ""), "format_id": clip.get("format_id", ""),
-             "qualite": clip.get("qualite", ""), "etat": "attente", "progres": 0, "message": "En attente…",
+             "qualite": clip.get("qualite", ""), "reduction_mode": clip.get("reduction_mode", "defaut"), "etat": "attente", "progres": 0, "message": "En attente…",
              "choix": _choix_par_defaut(groupe), "contexte": groupe}
         TRAVAUX[tid] = c
         _sauver()
@@ -232,13 +244,13 @@ def _preparer(c):
         t = telechargement.telecharger(c["video_id"], dossier, _progression(c), format_id=c.get("format_id", ""))
         source = Path(t["fichier"])
         reduction = {}
-        red = _CFG["reduction"]()
-        if red.get("actif"):
+        veut, crf = reduction_voulue(c)
+        if veut:
             _maj(c, etat="reduction", progres=0, message="Réduction de la taille du clip (environ 10 minutes)…")
             def avance(pct):
                 c["progres"], c["message"] = pct, f"Réduction de la taille du clip… {pct} % (environ 10 minutes)"
             reduit = dossier / "reduit.mkv"
-            reduction = telechargement.reduire(source, reduit, int(red.get("crf", 30)), avance)
+            reduction = telechargement.reduire(source, reduit, crf, avance)
             if reduction["fait"]:
                 try:
                     source.unlink()

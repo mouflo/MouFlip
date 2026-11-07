@@ -133,6 +133,8 @@
     details.ajout { margin:10px 0; padding:10px 12px; border:1px dashed var(--line); border-radius:8px; }
     details.ajout summary { cursor:pointer; font-weight:600; }
     .ajout .champ { display:block; margin:8px 0; } .ajout .champ input { width:100%; background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:9px; }
+    label.red { font-size:.82rem; color:var(--muted); display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap; }
+    label.red select { background:var(--field); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; max-width:100%; }
     .progress { background:var(--field); border-radius:6px; height:30px; position:relative; overflow:hidden; display:none; margin:8px 0; }
     .progress.show { display:block; }
     .progress .bar { background:var(--accent); height:100%; width:0; transition:width .4s; }
@@ -181,7 +183,7 @@ async function api(url, opts) {
 const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
 function note(text, kind) { $('msg').innerHTML = text ? `<div class="note ${kind || ''}">${esc(text)}</div>` : ''; }
 
-let G = null, F = {}, V = {}, AP = {}, VER = {}, Q = {}, QUAL = {};   // Q : qualité choisie par clip ; QUAL : qualités lues par vidéo   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
+let G = null, F = {}, V = {}, AP = {}, VER = {}, Q = {}, QUAL = {}, RD = {}, REDGEN = {actif: false, crf: 30};   // Q : qualité choisie par clip ; QUAL : qualités lues par vidéo   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
 
 async function chercher() {
     const q = $('q').value.trim(); if (q.length < 2) return;
@@ -201,6 +203,7 @@ async function ouvrir(mbid, actualiser) {
     note(''); $('cands').innerHTML = ''; G = d; F = {}; AP = {};
     const ch = await api('/api/choix/' + mbid); V = ch.choix || {};
     const cq = await api('/api/choix_qualite/' + mbid); Q = cq.choix || {};
+    const cr = await api('/api/choix_reduction/' + mbid); RD = cr.choix || {}; REDGEN = await api('/api/settings/reduction');
     dessiner();
 }
 function filtreClips() {
@@ -244,6 +247,7 @@ function dessiner() {
             <div class="search-row"><input type="text" id="ajoutLien" placeholder="https://www.youtube.com/watch?v=…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn" id="ajoutChercher">🔎 Lire la vidéo</button></div>
             <div id="ajoutForm"></div>
         </details>
+        <div class="toolbar"><label class="red">📉 Taille des clips cochés : <select id="redTous"><option value="">— choisir —</option>${optionsReduction('')}</select></label></div>
         <div class="toolbar"><button class="btn ghost" id="lireFormats">📊 Voir le meilleur format des clips cochés</button><button class="btn" id="telecharger">⬇️ Télécharger les clips cochés</button></div>
         <div class="progress" id="prog"><div class="bar" id="progBar"></div><div class="txt" id="progTxt"></div></div>
         <div id="clips">${liste.map((c, i) => ligne(c, i)).join('') || '<div class="muted" style="padding:14px">Aucun clip dans cette vue.</div>'}</div>
@@ -254,6 +258,15 @@ function dessiner() {
     $('toutDecocher').onclick = () => document.querySelectorAll('.clip input').forEach(x => x.checked = false);
     if ($('actualiser')) $('actualiser').onclick = e => { e.preventDefault(); ouvrir(G.fiche.mbid, true); };
     document.querySelectorAll('[data-retirer-ajout]').forEach(a => a.onclick = async e => { e.preventDefault(); await post('/api/ajout/retirer', {mbid: G.fiche.mbid, titre: a.dataset.retirerAjout}); ouvrir(G.fiche.mbid); });
+    document.querySelectorAll('[data-red]').forEach(sel => sel.onchange = () => choisirReduction([document.querySelectorAll('.clip')[Number(sel.dataset.red)].dataset.t], sel.value));
+    $('redTous').onchange = async () => {
+        const mode = $('redTous').value; if (!mode) return;
+        const els = [...document.querySelectorAll('.clip')].filter(el => el.querySelector('input[type=checkbox]').checked);
+        if (!els.length) { $('redTous').value = ''; return note('Coche d’abord au moins un clip.', 'warn'); }
+        await choisirReduction(els.map(el => el.dataset.t), mode);
+        els.forEach(el => { const s2 = el.querySelector('[data-red]'); if (s2) s2.value = mode; });
+        note(`${els.length} clip(s) : « ${NOMS_RED[mode]} ».`); $('redTous').value = '';
+    };
     $('ajoutChercher').onclick = ajoutLire;
     $('ajoutLien').onkeydown = e => { if (e.key === 'Enter') ajoutLire(); };
     $('lireFormats').onclick = lireFormats;
@@ -269,7 +282,17 @@ function ligne(c, i) {
         ${c.source === 'ajout' ? `<div class="chemin"><a href="#" data-retirer-ajout="${esc(c.titre)}">✕ Retirer ce clip ajouté à la main</a></div>` : ''}
         <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
         <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div>
-        <div class="voir"><button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''} <span id="qp${i}">${Q[c.titre] ? '<span class="pill ok">qualité choisie : ' + esc(Q[c.titre].texte) + '</span>' : ''}</span><div id="voir${i}"></div></div></div>`;
+        <div class="voir"><label class="red">📉 Taille : <select data-red="${i}">${optionsReduction(RD[c.titre] || 'defaut')}</select></label> <button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''} <span id="qp${i}">${Q[c.titre] ? '<span class="pill ok">qualité choisie : ' + esc(Q[c.titre].texte) + '</span>' : ''}</span><div id="voir${i}"></div></div></div>`;
+}
+const NOMS_RED = {defaut: 'Selon le réglage', non: 'Ne pas réduire', tres_peu_de_perte: 'Très peu de perte (≈ 60 %)', leger: 'Équilibré (≈ 50 %)', plus_petit: 'Plus petit (≈ 35 %)'};
+function optionsReduction(cur) {
+    const general = REDGEN.actif ? 'réglage actuel : réduit' : 'réglage actuel : pas de réduction';
+    return Object.entries(NOMS_RED).map(([v, t]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 'defaut' ? t + ' (' + general + ')' : t}</option>`).join('');
+}
+async function choisirReduction(titres, mode) {
+    const r = await post('/api/choix_reduction', {mbid: G.fiche.mbid, titres, mode});
+    if (!r.ok) return note(r.error || 'Choix impossible.', 'err');
+    titres.forEach(t => { if (mode === 'defaut') delete RD[t]; else RD[t] = mode; });
 }
 const taille = o => !o ? '' : o < 1e6 ? Math.max(1, Math.round(o / 1e3)) + ' Ko' : o >= 1e9 ? (o / 1e9).toFixed(2).replace('.', ',') + ' Go' : Math.round(o / 1e6) + ' Mo';
 function texteVersion(id) {
@@ -575,7 +598,7 @@ function carteTravail(t) {
     const actif = ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat);
     const pill = {attente: '<span class="pill">en attente</span>', telechargement: '<span class="pill warn">téléchargement</span>', reduction: '<span class="pill warn">réduction de la taille</span>', audio: '<span class="pill warn">volume</span>',
                   pret: '<span class="pill ok">prêt à ranger</span>', range: '<span class="pill ok">✅ rangé</span>', erreur: '<span class="pill err">erreur</span>'}[t.etat] || '';
-    return `<div class="job"><div class="titre">${esc(t.groupe)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> ${pill}${t.qualite ? ' <span class="pill">' + esc(t.qualite) + '</span>' : ''}</div>
+    return `<div class="job"><div class="titre">${esc(t.groupe)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> ${pill}${t.qualite ? ' <span class="pill">' + esc(t.qualite) + '</span>' : ''}${t.reduction_mode && t.reduction_mode !== 'defaut' ? ' <span class="pill">📉 ' + esc(NOMS_RED[t.reduction_mode] || '') + '</span>' : ''}</div>
         ${actif ? `<div class="barre"><i style="width:${t.progres || 0}%"></i></div>` : ''}
         <div class="muted">${esc(t.message || '')}</div>
         

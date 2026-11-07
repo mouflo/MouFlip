@@ -287,6 +287,7 @@ def api_travaux():
         return jsonify({"error": f"MusicBrainz est injoignable : {e}"}), 502
     choix = _choix_lire().get(mbid, {})
     qualites = (_lire_json(_qualite_fichier()) or {}).get(mbid, {})
+    reductions = (_lire_json(_reduction_fichier()) or {}).get(mbid, {})
     ajoutes = []
     for c in clips[:40]:
         titre = str(c.get("titre", "")).strip()
@@ -301,7 +302,7 @@ def api_travaux():
             fid, texte = "", ""
         ajoutes.append(travaux.ajouter(ctx, {"titre": titre, "album": str(c.get("album") or titre), "annee": str(c.get("annee") or ""),
                                               "mbid": str(c.get("mbid") or ""), "rg": str(c.get("rg") or "") or _resoudre_rg(ctx, titre, str(c.get("album") or titre)), "video_id": video_id,
-                                              "format_id": fid, "qualite": texte}))
+                                              "format_id": fid, "qualite": texte, "reduction_mode": reductions.get(titre, "defaut")}))
     return jsonify({"travaux": ajoutes})
 
 
@@ -552,6 +553,36 @@ def _tester_imvdb(cle):
 
 _route_cle("theaudiodb", "THEAUDIODB_KEY", _tester_audiodb)
 _route_cle("imvdb", "IMVDB_API_KEY", _tester_imvdb)
+
+
+MODES_REDUCTION = ("defaut", "non") + tuple(telechargement.CRF_REDUCTION)
+
+
+def _reduction_fichier():
+    return BASE_DIR / "data" / "choix_reduction.json"
+
+
+@app.route("/api/choix_reduction/<mbid>")
+def api_choix_reduction_lire(mbid):
+    return jsonify({"choix": (_lire_json(_reduction_fichier()) or {}).get(mbid, {})})
+
+
+@app.route("/api/choix_reduction", methods=["POST"])
+def api_choix_reduction():
+    """Retient, clip par clip, comment réduire la taille : défaut (réglage général), non, ou un niveau. Un clip peut être réduit alors que le réglage général est coupé."""
+    b = request.get_json(silent=True) or {}
+    mbid, mode = str(b.get("mbid", "")), str(b.get("mode", "defaut"))
+    titres = [str(t).strip() for t in (b.get("titres") or ([b.get("titre")] if b.get("titre") else [])) if str(t).strip()][:60]
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid) or not titres or mode not in MODES_REDUCTION:
+        return jsonify({"ok": False, "error": "Choix invalide."}), 400
+    d = _lire_json(_reduction_fichier()) or {}
+    for t in titres:
+        if mode == "defaut":
+            d.get(mbid, {}).pop(t, None)
+        else:
+            d.setdefault(mbid, {})[t] = mode
+    _ecrire_json(_reduction_fichier(), d)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/settings/reduction", methods=["GET", "POST"])

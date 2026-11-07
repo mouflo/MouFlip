@@ -414,6 +414,25 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(g["choix"]["leger"], 30)
         self.A.REDUCTION.update(actif=False, crf=30)                                    # remis comme avant pour les autres tests
 
+    def test_choix_de_reduction_par_clip_enregistre_et_transmis(self):
+        with mock.patch.object(self.A, "_reduction_fichier", return_value=Path(self.tmp.name) / "choix_reduction.json"):
+            p1, p2, p3, p4 = self._faux_mb()
+            with p1, p2, p3, p4:
+                ok = self.c.post("/api/choix_reduction", json={"mbid": self.MB, "titres": ["Pink Venom", "Autre"], "mode": "plus_petit"}).get_json()
+                self.assertTrue(ok["ok"])
+                self.assertEqual(self.c.get("/api/choix_reduction/" + self.MB).get_json()["choix"], {"Pink Venom": "plus_petit", "Autre": "plus_petit"})
+                with mock.patch.object(self.A.travaux, "ajouter", side_effect=lambda ctx, clip: clip) as aj:
+                    self.c.post("/api/travaux", json={"mbid": self.MB, "clips": [{"titre": "Pink Venom", "album": "BORN PINK"}]})
+                self.assertEqual(aj.call_args.args[1]["reduction_mode"], "plus_petit")
+                self.c.post("/api/choix_reduction", json={"mbid": self.MB, "titre": "Pink Venom", "mode": "defaut"})        # retour au réglage général
+                self.assertEqual(self.c.get("/api/choix_reduction/" + self.MB).get_json()["choix"], {"Autre": "plus_petit"})
+                with mock.patch.object(self.A.travaux, "ajouter", side_effect=lambda ctx, clip: clip) as aj:
+                    self.c.post("/api/travaux", json={"mbid": self.MB, "clips": [{"titre": "Pink Venom", "album": "BORN PINK"}]})
+                self.assertEqual(aj.call_args.args[1]["reduction_mode"], "defaut")
+        for mauvais in ({"mode": "h265"}, {"mode": "non", "titres": []}, {"mode": "non", "mbid": "x", "titres": ["a"]}):
+            corps = {"mbid": self.MB, "titres": ["a"], **mauvais}
+            self.assertEqual(self.c.post("/api/choix_reduction", json=corps).status_code, 400)
+
     def test_pages_et_outils(self):
         self.assertEqual(self.c.get("/").status_code, 200)
         self.assertEqual(self.c.get("/reglages").status_code, 200)

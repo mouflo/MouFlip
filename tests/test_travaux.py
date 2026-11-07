@@ -636,6 +636,38 @@ class ReductionTest(unittest.TestCase):
         self.assertFalse(r["fait"])
         self.assertIn("mémoire", r["raison"])
 
+    def test_choix_par_clip_defaut_non_ou_un_niveau(self):
+        travaux.configurer(self.tmp / "data", lambda: "/x", lambda: 89.0, lambda: "192k", mock.Mock(configured=True), lambda: True, lambda: {"actif": True, "crf": 30})
+        self.assertEqual(travaux.reduction_voulue({}), (True, 30))                       # pas de choix : le réglage général
+        self.assertEqual(travaux.reduction_voulue({"reduction_mode": "defaut"}), (True, 30))
+        self.assertEqual(travaux.reduction_voulue({"reduction_mode": "non"}), (False, 0))  # ce clip-là jamais réduit
+        self.assertEqual(travaux.reduction_voulue({"reduction_mode": "plus_petit"}), (True, 36))
+        self.assertEqual(travaux.reduction_voulue({"reduction_mode": "tres_peu_de_perte"}), (True, 27))
+        travaux.configurer(self.tmp / "data", lambda: "/x", lambda: 89.0, lambda: "192k", mock.Mock(configured=True), lambda: True, lambda: {"actif": False, "crf": 30})
+        self.assertFalse(travaux.reduction_voulue({})[0])                                # réglage général coupé : pas de réduction
+        self.assertEqual(travaux.reduction_voulue({"reduction_mode": "leger"}), (True, 30))   # …mais ce clip-là, oui
+
+    def test_clip_a_ne_pas_reduire_malgre_le_reglage_general(self):
+        travaux.TRAVAUX.clear()
+        racine = self.tmp / "Video clip"
+        racine.mkdir()
+        travaux.configurer(self.tmp / "data", lambda: str(racine), lambda: 89.0, lambda: "192k", mock.Mock(configured=True), lambda: True, lambda: {"actif": True, "crf": 30})
+        src_gros = self._source("gros.mkv", args=("-crf", "10"))
+        def faux_telechargement(video_id, dossier, progression=None, ydl_cls=None, format_id=""):
+            d = Path(dossier)
+            d.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src_gros, d / "source.mkv")
+            return {"fichier": str(d / "source.mkv"), "vignette": "", "titre": "t", "chaine": "c", "duree": 3}
+        ctx = {"nom": "aespa", "mbid": "b51c672b-0000-0000-0000-000000000000", "fiche": {"nom": "aespa", "mbid": "b", "pays": "KR", "debut": "2020"}, "dossier_groupe": "",
+               "images": {}, "biographie": "", "genre": "K-Pop", "candidats": {}, "images_album": {}}
+        with mock.patch.object(travaux.telechargement, "telecharger", side_effect=faux_telechargement):
+            c = travaux.ajouter(ctx, {"titre": "T", "album": "A", "video_id": "abcdefghijk", "reduction_mode": "non"})
+            travaux._preparer(travaux.TRAVAUX[c["id"]])
+        j = travaux.TRAVAUX[c["id"]]
+        self.assertEqual(j["etat"], "pret", j["message"])
+        self.assertEqual(j["reduction"], {})                                             # rien n'a été réduit
+        self.assertEqual(j["sonde"]["video"]["codec"], "h264")                           # l'image est restée telle quelle
+
     def test_dans_la_file_de_travaux_reduction_puis_volume(self):
         travaux.TRAVAUX.clear()
         racine = self.tmp / "Video clip"
