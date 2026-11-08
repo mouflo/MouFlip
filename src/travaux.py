@@ -397,6 +397,9 @@ def relancer(tid) -> dict:
     return {"ok": True}
 
 
+apres_rangement_fn = None
+
+
 def ranger(tid) -> dict:
     """Écrit dans « Video clip » (seulement ce que le plan annonce), prévient Emby, nettoie le dossier de travail."""
     with _VERROU:
@@ -418,6 +421,11 @@ def ranger(tid) -> dict:
     shutil.rmtree(_CFG["dossier"] / c["id"], ignore_errors=True)
     _maj(c, etat="range", message="Rangé. " + emby, resultat=res, fichier="", poster="")
     logger.info("[Travaux] rangé : %s - %s (%s)", c["groupe"], c["titre"], emby)
+    if apres_rangement_fn:
+        try:
+            apres_rangement_fn(c)                                    # ex. le son studio part tout seul dans la Musique (réglage de l'utilisatrice)
+        except Exception as e:
+            logger.warning("[Travaux] suite du rangement : %s", e)
     return {"ok": True, "resultat": res, "emby": emby}
 
 

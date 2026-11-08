@@ -199,7 +199,7 @@ def regler_volume(chemin, cible_db: float, debit: str = "256k") -> dict:
 
 
 # ---------- travaux ----------
-def ajouter(artiste: str, mbid: str, clip: dict, alias=()) -> dict:
+def ajouter(artiste: str, mbid: str, clip: dict, alias=(), auto: bool = False) -> dict:
     """Met un morceau en file d'attente pour son son studio. Refuse un doublon actif ou déjà prêt."""
     with _VERROU:
         for c in SONS.values():
@@ -207,7 +207,7 @@ def ajouter(artiste: str, mbid: str, clip: dict, alias=()) -> dict:
                 return c
         tid = uuid.uuid4().hex[:10]
         c = {"id": tid, "artiste": artiste, "alias": list(alias), "mbid": mbid, "titre": clip["titre"], "album": clip.get("album") or clip["titre"],
-             "annee": str(clip.get("annee") or ""), "rg": clip.get("rg") or "", "duree": clip.get("duree") or 0, "etat": "attente", "message": "En attente.",
+             "annee": str(clip.get("annee") or ""), "rg": clip.get("rg") or "", "duree": clip.get("duree") or 0, "auto": auto, "etat": "attente", "message": "En attente.",
              "cree": time.time()}
         SONS[tid] = c
     _sauver()
@@ -233,6 +233,17 @@ def _deja_dans_la_musique(c) -> str:
     except OSError:
         pass
     return ""
+
+
+def sur(c, v: dict) -> tuple[bool, str]:
+    """Peut-on ranger ce son SANS demander ? Oui seulement si c'est le son du label, du même artiste et du même titre (déjà garanti par choisir()),
+    et que sa durée colle à celle du clip validé (écart d'au plus 15 s ou 10 %) ; sinon on dit pourquoi et on laisse l'utilisatrice décider."""
+    d, dc = v.get("duration") or 0, c.get("duree") or 0
+    if not d or not dc:
+        return False, "durée inconnue"
+    if abs(d - dc) > max(15, 0.10 * dc):
+        return False, f"durée trop différente du clip ({int(d)} s pour le son, {int(dc)} s pour le clip)"
+    return True, ""
 
 
 def _preparer(c):
@@ -278,6 +289,13 @@ def _preparer(c):
     info = _sonder(final)
     _maj(c, etat="pret", fichier=str(final), taille=final.stat().st_size, volume=vol, conversion=methode, debit=info["debit"], duree_son=info["duree"],
          message=f"Prêt à ranger : {fmt.upper()} · {methode} · volume {vol['avant']} → {vol['apres']} dB ({vol['methode']}).")
+    if c.get("auto"):                                                  # lancé par le rangement du clip : rangé tout seul seulement si tout est sûr
+        ok, raison = sur(c, v)
+        if not ok:
+            return _maj(c, message=f"Pas assez sûr pour le ranger seul ({raison}) : vérifie puis range. {c['message']}")
+        r = ranger(c["id"])
+        if not r["ok"]:
+            _maj(c, message=f"Rangement automatique refusé : {r['error']}")
 
 
 _REVEIL = threading.Event()

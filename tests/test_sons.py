@@ -38,6 +38,15 @@ class ChoixDuSonTest(unittest.TestCase):
         self.assertEqual(sons.choisir("aespa", "Spicy", 205, [a, b])["id"], "bon")
 
 
+class SurTest(unittest.TestCase):
+    def test_sur_selon_la_duree(self):
+        c = {"duree": 205}
+        self.assertTrue(sons.sur(c, {"duration": 197})[0])
+        self.assertFalse(sons.sur(c, {"duration": 120})[0])
+        self.assertFalse(sons.sur({"duree": 0}, {"duration": 197})[0])
+        self.assertFalse(sons.sur(c, {})[0])
+
+
 class RangementSonTest(unittest.TestCase):
     def _pret(self, tmp, fmt="m4a"):
         _cfg(tmp, fmt)

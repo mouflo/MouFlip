@@ -425,7 +425,17 @@ def api_playlists_chercher(pid):
 def _reglage_son() -> dict:
     c = ((CONFIG.get("clips") or {}).get("son") or {})
     return {"format": c.get("format") if c.get("format") in sons.FORMATS else "m4a", "debit_m4a": c.get("debit_m4a", "256k"), "debit_mp3": c.get("debit_mp3", "320k"),
-            "dossier": c.get("dossier", "")}
+            "dossier": c.get("dossier", ""), "auto": bool(c.get("auto", False))}
+
+
+def _son_apres_clip(c):
+    """Quand un clip est rangé et que le réglage est actif : son studio demandé tout de suite, rangé seul si tout est sûr."""
+    if not _reglage_son()["auto"]:
+        return
+    ctx = c.get("contexte") or {}
+    fiche = ctx.get("fiche") or {}
+    sons.ajouter(c["groupe"], ctx.get("mbid", ""), {"titre": c["titre"], "album": c["album"], "annee": c.get("annee", ""), "rg": c.get("rg", ""),
+                                                    "duree": (c.get("sonde") or {}).get("duree", 0)}, fiche.get("alias", []), auto=True)
 
 
 def _racine_musique() -> str:
@@ -488,12 +498,12 @@ def api_settings_son():
         cfg = json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else {}
     except ValueError:
         return jsonify({"ok": False, "error": "config.json est illisible : rien n'a été modifié."}), 500
-    cfg.setdefault("clips", {})["son"] = {"format": fmt, "debit_m4a": d4, "debit_mp3": d3, "dossier": dossier}
+    cfg.setdefault("clips", {})["son"] = {"format": fmt, "debit_m4a": d4, "debit_mp3": d3, "dossier": dossier, "auto": bool(b.get("auto"))}
     tmp = chemin.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, chemin)
     CONFIG.setdefault("clips", {})["son"] = cfg["clips"]["son"]
-    return jsonify({"ok": True, "message": f"Enregistré : les prochains sons seront en {fmt.upper()}" + (f" ({d3})" if fmt == "mp3" else " (AAC de YouTube recopié sans perte)") + "."})
+    return jsonify({"ok": True, "message": f"Enregistré : les prochains sons seront en {fmt.upper()}" + (f" ({d3})" if fmt == "mp3" else " (AAC de YouTube recopié sans perte)") + (" Le son studio part tout seul dans la Musique quand tu ranges un clip, si tout est sûr." if b.get("auto") else " Le son studio reste à lancer à la main.")})
 
 
 @app.route("/api/groupe/<mbid>")
@@ -1234,6 +1244,7 @@ import redemarrer
 redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe() + sons.occupe())
 images_perso.configurer(BASE_DIR / "data")
 travaux.emby_artiste_fn = lambda nom: emby_artistes.chercher(EMBY, nom)
+travaux.apres_rangement_fn = lambda c: _son_apres_clip(c)
 sons.configurer(BASE_DIR / "data", lambda: _racine_musique(), lambda: DOSSIER_CLIPS, _reglage_son, lambda: AUDIO["cible_db"], EMBY, sources.piste_dans_album, ecriture=False)
 travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"], lambda: REDUCTION, ecriture=False)
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")

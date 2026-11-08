@@ -63,6 +63,7 @@
         <div class="field" style="max-width:200px"><label for="sonDebitMp3">Débit du MP3</label><select id="sonDebitMp3"><option>192k</option><option>256k</option><option>320k</option></select></div>
         <div class="field" style="max-width:200px"><label for="sonDebitM4a">Débit si le M4A doit être refait</label><select id="sonDebitM4a"><option>192k</option><option>256k</option><option>320k</option></select></div>
         <div class="field"><label for="sonDossier">Dossier de la musique (vide = « Musique » à côté de « Video clip »)</label><input type="text" id="sonDossier" autocomplete="off" placeholder="/mnt/mouflosyno/Emby-Media/Musique"></div>
+        <label class="check"><input type="checkbox" id="sonAuto"> <b>Automatique</b> : quand je range un clip, son son studio part <b>tout seul</b> dans ma Musique si tout est sûr (même artiste, même titre, durée qui colle au clip). Sinon il reste « prêt à ranger » avec la raison.</label>
         <div class="state" id="sonEtat"></div>
         <div class="row"><button class="btn" id="sonSave">Enregistrer</button></div>
         <div id="sonMsg"></div>
@@ -144,9 +145,9 @@ async function loadAll() {
 $('redSave').addEventListener('click', async () => { const r = await post('/api/settings/reduction', {actif: $('redActif').checked, crf: Number($('redNiveau').value)}); say('redMsg', r.message || r.error, r.ok); });
 $('faTest').addEventListener('click', async () => { const r = await post('/api/settings/fanart', {api_key: $('faKey').value, test: true}); say('faMsg', r.message || r.error, r.ok); });
 $('faSave').addEventListener('click', async () => { const r = await post('/api/settings/fanart', {api_key: $('faKey').value}); say('faMsg', r.message || r.error, r.ok); if (r.ok) { $('faKey').value = ''; loadAll(); } });
-(async () => { const sn = await api('/api/settings/son'); $('sonFormat').value = sn.format; $('sonDebitMp3').value = sn.debit_mp3; $('sonDebitM4a').value = sn.debit_m4a; $('sonDossier').value = sn.dossier || '';
+(async () => { const sn = await api('/api/settings/son'); $('sonFormat').value = sn.format; $('sonDebitMp3').value = sn.debit_mp3; $('sonDebitM4a').value = sn.debit_m4a; $('sonDossier').value = sn.dossier || ''; $('sonAuto').checked = !!sn.auto;
     $('sonEtat').textContent = (sn.racine_ok ? '✅ Dossier trouvé : ' : '⚠️ Dossier introuvable (partage monté ?) : ') + sn.racine; })();
-$('sonSave').addEventListener('click', async () => { const r = await post('/api/settings/son', {format: $('sonFormat').value, debit_mp3: $('sonDebitMp3').value, debit_m4a: $('sonDebitM4a').value, dossier: $('sonDossier').value}); say('sonMsg', r.message || r.error, r.ok); });
+$('sonSave').addEventListener('click', async () => { const r = await post('/api/settings/son', {format: $('sonFormat').value, debit_mp3: $('sonDebitMp3').value, debit_m4a: $('sonDebitM4a').value, dossier: $('sonDossier').value, auto: $('sonAuto').checked}); say('sonMsg', r.message || r.error, r.ok); });
 $('dbSave').addEventListener('click', async () => { const r = await post('/api/settings/audio', {target_db: $('dbValue').value, bitrate: $('dbDebit').value, sans_perte: $('dbSansPerte').checked}); say('dbMsg', r.message || r.error, r.ok); });
 $('embyHostSave').addEventListener('click', async () => { const r = await post('/api/settings/emby-host', {host: $('embyHost').value}); say('embyHostMsg', r.message || r.error, r.ok); });
 $('embyKeyTest').addEventListener('click', async () => { const r = await post('/api/settings/emby', {api_key: $('embyKey').value, test: true}); say('embyKeyMsg', r.message || r.error, r.ok); });
