@@ -5,7 +5,7 @@ import os
 import re
 import threading
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import requests
 
@@ -225,6 +225,60 @@ def couvertures_externes(rg: str, groupe: str, album: str) -> list[dict]:
 def resume_wikipedia(titre: str, langue: str = "fr") -> str:
     d = _get(f"https://{langue}.wikipedia.org/api/rest_v1/page/summary/{quote(titre.replace(' ', '_'))}")
     return ((d or {}).get("extract") or "") if (d or {}).get("type") == "standard" else ""
+
+
+def _titre_wikipedia(url: str) -> tuple[str, str]:
+    """« https://fr.wikipedia.org/wiki/Aespa_(groupe) » → (« fr », « Aespa_(groupe) »)."""
+    m = re.match(r"https?://([a-z\-]+)\.wikipedia\.org/wiki/([^?#]+)", url or "")
+    return (m.group(1), unquote(m.group(2))) if m else ("", "")
+
+
+def pages_wikipedia(fiche: dict) -> dict:
+    """{langue: titre de page} pour le groupe, d'après le lien exact de MusicBrainz (Wikidata donne les pages fr et en d'un même sujet) ;
+    jamais d'après le nom seul si un lien exact existe."""
+    pages = {}
+    liens = fiche.get("liens") or {}
+    langue, titre = _titre_wikipedia(liens.get("wikipedia", ""))
+    if langue and titre:
+        pages[langue] = titre
+    q = re.search(r"/(Q\d+)", liens.get("wikidata", ""))
+    if q:
+        d = _get(f"https://www.wikidata.org/wiki/Special:EntityData/{q.group(1)}.json")
+        liens_wiki = (((d or {}).get("entities") or {}).get(q.group(1)) or {}).get("sitelinks") or {}
+        for lg in ("fr", "en"):
+            t = (liens_wiki.get(f"{lg}wiki") or {}).get("title")
+            if t:
+                pages[lg] = t.replace(" ", "_")
+    return pages
+
+
+def biographie_wikipedia(fiche: dict) -> dict:
+    """{fr: texte, en: texte} : le résumé de la page Wikipédia du groupe (interface officielle de Wikipédia), dans chaque langue trouvée.
+    Sans lien exact connu, repli sur le nom du groupe (page « standard » seulement : une page d'homonymie est refusée)."""
+    pages, sortie = pages_wikipedia(fiche), {}
+    for lg in ("fr", "en"):
+        titre = pages.get(lg) or ("" if pages else fiche.get("nom", ""))
+        if titre:
+            t = resume_wikipedia(titre, lg)
+            if t:
+                sortie[lg] = t
+    return sortie
+
+
+def choisir_biographie(audiodb: dict, wiki: dict) -> tuple[str, str, str]:
+    """(texte, langue, source) : français d'abord (TheAudioDB puis Wikipédia), l'anglais seulement s'il n'y a pas de français."""
+    ad = (audiodb or {}).get("biographie") or ""
+    lad = (audiodb or {}).get("biographie_langue") or ""
+    wiki = wiki or {}
+    if ad and lad == "fr":
+        return ad, "fr", "TheAudioDB"
+    if wiki.get("fr"):
+        return wiki["fr"], "fr", "Wikipédia"
+    if ad:
+        return ad, lad or "en", "TheAudioDB"
+    if wiki.get("en"):
+        return wiki["en"], "en", "Wikipédia"
+    return "", "", ""
 
 
 def _album_choisi(releases: list[dict], titre: str) -> tuple[str, str, str]:

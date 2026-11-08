@@ -880,3 +880,23 @@ class DecouverteTest(unittest.TestCase):
             r = sources.clips_mb("x", "VIVIZ", decouverte=lambda pistes: [{"titre": "MANIAC", "video_id": "aaaaaaaaaaa", "duree": 196}] if "maniac" in pistes else [])
         m = next(c for c in r if c["titre"] == "MANIAC")
         self.assertEqual((m["album"], m["annee"], m["rg"], m["video_id"], m["source"]), ("VERSUS", "2023", "rgV", "aaaaaaaaaaa", "youtube"))
+
+
+class BiographieTest(unittest.TestCase):
+    def test_francais_avant_anglais(self):
+        from src import sources
+        en = {"biographie": "English bio", "biographie_langue": "en"}
+        self.assertEqual(sources.choisir_biographie(en, {"fr": "Bio fr", "en": "Bio en"}), ("Bio fr", "fr", "Wikipédia"))
+        self.assertEqual(sources.choisir_biographie(en, {"en": "Bio en"}), ("English bio", "en", "TheAudioDB"))
+        self.assertEqual(sources.choisir_biographie({}, {"en": "Bio en"}), ("Bio en", "en", "Wikipédia"))
+        self.assertEqual(sources.choisir_biographie({"biographie": "Fr", "biographie_langue": "fr"}, {"fr": "Bio fr"}), ("Fr", "fr", "TheAudioDB"))
+        self.assertEqual(sources.choisir_biographie({}, {}), ("", "", ""))
+
+    def test_pages_par_le_lien_exact(self):
+        from unittest import mock
+        from src import sources
+        wd = {"entities": {"Q1": {"sitelinks": {"frwiki": {"title": "IU (chanteuse)"}, "enwiki": {"title": "IU (singer)"}}}}}
+        with mock.patch.object(sources, "_get", return_value=wd):
+            self.assertEqual(sources.pages_wikipedia({"liens": {"wikidata": "https://www.wikidata.org/wiki/Q1"}}),
+                             {"fr": "IU_(chanteuse)", "en": "IU_(singer)"})
+        self.assertEqual(sources.pages_wikipedia({"liens": {"wikipedia": "https://fr.wikipedia.org/wiki/Aespa_%28groupe%29"}}), {"fr": "Aespa_(groupe)"})

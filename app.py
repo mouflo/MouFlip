@@ -82,7 +82,7 @@ def _roots():
 
 CACHE_DIR = BASE_DIR / "data" / "cache"
 VERSION_RECHERCHE = 2      # +1 quand la recherche de groupes s'améliore (les recherches enregistrées plus anciennes sont refaites)
-VERSION_LISTE = 4          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
+VERSION_LISTE = 5          # +1 quand la liste des clips s'enrichit : les listes enregistrées plus anciennes sont refaites toutes seules (si MusicBrainz répond)
 
 
 def _ecrire_json(chemin: Path, data):
@@ -198,7 +198,7 @@ def _construire_base(mbid: str) -> dict:
             titre_album, rg = _proposer_album(rgs, c["date"])
             if titre_album:
                 c["album"], c["rg"] = titre_album, rg
-    audiodb, wiki = {}, ""
+    audiodb, wiki = {}, {}
     try:
         audiodb = sources.images_audiodb(mbid)
     except sources.SourceIndisponible as e:
@@ -208,9 +208,9 @@ def _construire_base(mbid: str) -> dict:
         fanart = sources.images_fanart(mbid)
     except sources.SourceIndisponible as e:
         erreurs.append(str(e))
-    if not (audiodb.get("biographie")):
+    if audiodb.get("biographie_langue") != "fr":                                # pas de bio française chez TheAudioDB : Wikipédia (lien exact de MusicBrainz)
         try:
-            wiki = sources.resume_wikipedia(fiche.get("nom", ""), "fr") or sources.resume_wikipedia(fiche.get("nom", ""), "en")
+            wiki = sources.biographie_wikipedia(fiche)
         except sources.SourceIndisponible as e:
             erreurs.append(str(e))
     return {"fiche": fiche, "clips": clips, "audiodb": audiodb, "wikipedia": wiki, "erreurs": erreurs, "fanart": fanart, "rgs": rgs, "chaines_mb": chaines_mb, "chaines_parents": chaines_parents, "enregistre": time.time(), "v": VERSION_LISTE}
@@ -253,13 +253,15 @@ def _groupe_complet(mbid: str, actualiser: bool = False) -> dict:
     dossier = existants.dossier_du_groupe(DOSSIER_CLIPS, [fiche["nom"]] + fiche.get("alias", []))
     locaux = existants.lister(dossier) if dossier else []
     nom_dossier = dossier.name if dossier else fiche["nom"]
+    wiki = base.get("wikipedia")
+    bio = sources.choisir_biographie(base["audiodb"], wiki if isinstance(wiki, dict) else ({"fr": wiki} if wiki else {}))     # anciennes listes : texte seul
     clips = []
     for c in base["clips"]:
         local = existants.deja_la(c["titre"], locaux)
         clips.append({**c, "deja": bool(local), "fichier_local": local,
                       "chemin_prevu": noms.chemin_prevu(DOSSIER_CLIPS, nom_dossier, fiche["nom"], c["album"], c["titre"])})
     return {"fiche": fiche, "dossier_groupe": str(dossier) if dossier else "", "dossier_nouveau": not dossier, "nb_locaux": len(locaux),
-            "biographie": base["audiodb"].get("biographie") or base["wikipedia"], "biographie_langue": base["audiodb"].get("biographie_langue") or ("fr" if base["wikipedia"] else ""),
+            "biographie": bio[0], "biographie_langue": bio[1], "biographie_source": bio[2],
             "images": {**base["audiodb"].get("images", {}), **base["fanart"]["images"]}, "images_album": base["fanart"]["albums"], "candidats": sources.candidats_images(base["audiodb"], base["fanart"]),
             "genre_audiodb": base["audiodb"].get("genre", ""), "fanart_cle": base["fanart"]["cle"], "chaines": _chaines_officielles(mbid), "clips": clips, "erreurs": base["erreurs"] + ([avertissement] if avertissement else []), "racine": DOSSIER_CLIPS,
             "racine_ok": Path(DOSSIER_CLIPS).is_dir(), "enregistre": base.get("enregistre", 0), "depuis_cache": not actualiser and not avertissement and bool(base.get("enregistre"))}
@@ -351,7 +353,7 @@ def _contexte_groupe(mbid: str) -> dict:
     """Tout ce qu'il faut savoir du groupe pour ranger ses clips (fiche, dossier existant, images, biographie)."""
     g = _groupe_complet(mbid)
     return {"nom": g["fiche"]["nom"], "mbid": mbid, "fiche": g["fiche"], "dossier_groupe": g["dossier_groupe"], "images": g["images"],
-            "biographie": g["biographie"], "biographie_langue": g.get("biographie_langue", ""), "images_album": g.get("images_album", {}),
+            "biographie": g["biographie"], "biographie_langue": g.get("biographie_langue", ""), "biographie_source": g.get("biographie_source", ""), "images_album": g.get("images_album", {}),
             "candidats": g.get("candidats", {}), "genre": (g["fiche"].get("genres") or ["K-Pop"])[0].title() if (g["fiche"].get("genres") or []) else "K-Pop"}
 
 

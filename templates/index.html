@@ -671,7 +671,7 @@ function rendreFiche() {
         <h3>CD (cdart)</h3><div class="aide">« cdart.png ».</div>${bandeImages('carre', f.album.cdart, 'album_cdart')}
       </section>
       <section class="fi"><h3>📝 Le texte (biographie du groupe)</h3>
-        <div class="aide">Écrit dans « artist.nfo » (langue : ${esc(g.biographie_langue || 'inconnue')}). Tu peux le corriger avant de ranger.${g.artist_nfo_existe ? ' <b>artist.nfo existe déjà : il ne sera pas modifié.</b>' : ''}</div>
+        <div class="aide">Écrit dans « artist.nfo » (${g.biographie_source ? 'source : ' + esc(g.biographie_source) + ', ' : ''}langue : ${esc(g.biographie_langue === 'fr' ? 'français' : g.biographie_langue === 'en' ? 'anglais' : (g.biographie_langue || 'inconnue'))}). Tu peux le corriger avant de ranger.${g.artist_nfo_existe ? ' <b>artist.nfo existe déjà : il ne sera pas modifié.</b>' : ''}</div>
         <textarea class="fi-bio" id="ficheBio" spellcheck="false">${esc(g.biographie)}</textarea>
         <div style="margin-top:6px"><button class="btn small ghost" id="ficheBioReset">↺ Texte d'origine</button></div>
       </section>
