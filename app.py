@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
+from src import playlists, audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -300,6 +300,125 @@ def api_chercher():
         enregistrees[cle] = {"date": time.time(), "groupes": groupes}
         _ecrire_json(fichier, enregistrees)
     return jsonify({"groupes": groupes})
+
+
+# ---- Playlists Deezer : les morceaux ajoutés depuis une date, et leur clip officiel ------------------------------------------------------------------
+_FICHIER_PLAYLISTS = BASE_DIR / "data" / "playlists.json"
+_PL_ETAT = {}
+_PL_VERROU = threading.Lock()
+
+
+def _playlists_liste() -> list:
+    d = _lire_json(_FICHIER_PLAYLISTS)
+    return d if isinstance(d, list) else []
+
+
+def _playlist_resultat(pid: str):
+    return _lire_json(CACHE_DIR / "playlists" / f"{pid}-resultat.json")
+
+
+@app.route("/api/playlists")
+def api_playlists():
+    liste = _playlists_liste()
+    return jsonify({"playlists": [{**p, "resultat": _playlist_resultat(p["id"]), "etat": dict(_PL_ETAT.get(p["id"]) or {})} for p in liste]})
+
+
+@app.route("/api/playlists/ajouter", methods=["POST"])
+def api_playlists_ajouter():
+    corps = request.get_json(silent=True) or {}
+    try:
+        pid = playlists.id_playlist(str(corps.get("lien", "")))
+        if not pid:
+            return jsonify({"error": "Je ne reconnais pas ce lien. Colle l'adresse d'une playlist Deezer (deezer.com/…/playlist/…)."}), 400
+        depuis = str(corps.get("depuis", "")).strip()
+        playlists.date_en_ts(depuis)
+        info = playlists.infos(pid)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except playlists.DeezerIndisponible as e:
+        return jsonify({"error": str(e)}), 502
+    liste = [p for p in _playlists_liste() if p["id"] != pid]
+    liste.append({"id": pid, "nom": info["nom"], "nb": info["nb"], "depuis": depuis})
+    _ecrire_json(_FICHIER_PLAYLISTS, liste)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/playlists/<pid>/depuis", methods=["POST"])
+def api_playlists_depuis(pid):
+    """Change la date de départ (« ✅ Tout marquer comme vu » = aujourd'hui)."""
+    corps = request.get_json(silent=True) or {}
+    depuis = time.strftime("%Y-%m-%d") if corps.get("aujourdhui") else str(corps.get("depuis", "")).strip()
+    try:
+        playlists.date_en_ts(depuis)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    liste = _playlists_liste()
+    for p in liste:
+        if p["id"] == pid:
+            p["depuis"] = depuis
+    _ecrire_json(_FICHIER_PLAYLISTS, liste)
+    (CACHE_DIR / "playlists" / f"{pid}-resultat.json").unlink(missing_ok=True)
+    return jsonify({"ok": True, "depuis": depuis})
+
+
+@app.route("/api/playlists/<pid>/retirer", methods=["POST"])
+def api_playlists_retirer(pid):
+    _ecrire_json(_FICHIER_PLAYLISTS, [p for p in _playlists_liste() if p["id"] != pid])
+    return jsonify({"ok": True})
+
+
+def _chercher_clips_playlist(pid: str, depuis: str):
+    etat = _PL_ETAT[pid]
+    try:
+        morceaux = playlists.morceaux(pid, playlists.date_en_ts(depuis))
+        etat.update(total=len(morceaux), fait=0, message=f"{len(morceaux)} morceau(x) ajouté(s) depuis le {depuis or 'début'}.")
+        fichier_art = CACHE_DIR / "playlists" / "artistes.json"
+        artistes = _lire_json(fichier_art) or {}                                  # nom normalisé → {mbid, nom, incertain} ou None (introuvable)
+        sortie = []
+        for m in morceaux:
+            ligne = {**m, "etat": "", "mbid": "", "clip": "", "album": "", "deja": False}
+            if playlists.version_alternative(m["titre"]):
+                ligne["etat"] = "version"
+            else:
+                cle = noms.normaliser(m["artiste"])
+                if cle not in artistes:
+                    trouves = [g for g in sources.chercher_groupes(m["artiste"], 8) if noms.normaliser(g["nom"]) == cle]
+                    artistes[cle] = {"mbid": trouves[0]["mbid"], "nom": trouves[0]["nom"], "incertain": len(trouves) > 1} if trouves else None
+                    _ecrire_json(fichier_art, artistes)
+                a = artistes[cle]
+                if not a:
+                    ligne["etat"] = "artiste_inconnu"
+                else:
+                    ligne["mbid"], ligne["incertain"] = a["mbid"], a["incertain"]
+                    g = _groupe_complet(a["mbid"])
+                    c = playlists.clip_du_morceau(m["titre"], g["clips"])
+                    if c:
+                        ligne.update(etat="deja" if c["deja"] else "clip", clip=c["titre"], album=c.get("album", ""), deja=bool(c["deja"]))
+                    else:
+                        ligne["etat"] = "sans_clip"
+            sortie.append(ligne)
+            etat["fait"] += 1
+            etat["message"] = f"{etat['fait']} / {etat['total']} morceaux regardés…"
+        _ecrire_json(CACHE_DIR / "playlists" / f"{pid}-resultat.json", {"date": time.strftime("%Y-%m-%d %H:%M"), "depuis": depuis, "lignes": sortie})
+        etat.update(en_cours=False, message="Terminé.")
+    except (playlists.DeezerIndisponible, sources.SourceIndisponible, ValueError) as e:
+        etat.update(en_cours=False, erreur=str(e), message="")
+    except Exception as e:
+        logging.getLogger(__name__).exception("Playlist %s", pid)
+        etat.update(en_cours=False, erreur=f"Erreur inattendue : {e}", message="")
+
+
+@app.route("/api/playlists/<pid>/chercher", methods=["POST"])
+def api_playlists_chercher(pid):
+    p = next((x for x in _playlists_liste() if x["id"] == pid), None)
+    if not p:
+        return jsonify({"error": "Playlist inconnue."}), 404
+    with _PL_VERROU:
+        if (_PL_ETAT.get(pid) or {}).get("en_cours"):
+            return jsonify({"ok": True})
+        _PL_ETAT[pid] = {"en_cours": True, "fait": 0, "total": 0, "message": "Lecture de la playlist chez Deezer…"}
+    threading.Thread(target=_chercher_clips_playlist, args=(pid, p.get("depuis", "")), daemon=True).start()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/groupe/<mbid>")

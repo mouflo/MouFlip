@@ -2,6 +2,7 @@
 
 ## [0.1] - 2026-11-07
 Première version de MouFlip (clips vidéo K-pop pour Emby).
+- 🎵 **Playlists Deezer** : colle l'adresse d'une playlist publique et une date ; seuls les morceaux ajoutés depuis cette date sont regardés (API publique de Deezer, sans clé). Chaque morceau est relié à son artiste (MusicBrainz) puis à son clip officiel : clips trouvés (toucher = ouvre le groupe avec ce clip coché), déjà dans la médiathèque, sans clip, artiste introuvable, versions alternatives ignorées. « ✅ Tout marquer comme vu » avance la date. Rien n'est téléchargé sans ton clic.
 - 📂 **Biographie de ta médiathèque** : quand `artist.nfo` existe, la fiche propose « Voir celle de ma médiathèque » (lecture seule) et dit que le texte de la case ne sera pas écrit ; le bouton de retour devient « Texte trouvé sur Internet ».
 - 📖 **Biographie en français d'abord** : TheAudioDB en français, sinon Wikipédia en français (page retrouvée par le lien exact de MusicBrainz / Wikidata, pas par le nom seul), sinon l'anglais. La fiche indique la source et la langue.
 - ✏️ **Fiche modifiable avant le rangement** : titre, album et année se corrigent dans la fiche (dossier, nom du fichier, .nfo et pochette suivent). Les cases des clips sont **décochées par défaut**.

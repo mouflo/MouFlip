@@ -172,6 +172,14 @@
         <div id="msg"></div>
     </div>
 
+    <details class="panel" id="plPanel">
+        <summary style="cursor:pointer;font-weight:600">🎵 Mes playlists Deezer : les nouveaux morceaux et leur clip</summary>
+        <div class="muted" style="margin:8px 0">Colle l'adresse d'une playlist Deezer <b>publique</b> et une date : seuls les morceaux ajoutés <b>à partir de cette date</b> sont regardés. Rien n'est téléchargé : tu vois les clips trouvés et tu choisis.</div>
+        <div class="recherche"><input type="text" id="plLien" placeholder="Adresse de la playlist (deezer.com/…/playlist/…)" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <div class="recherche"><input type="text" id="plDepuis" placeholder="Ajoutés depuis le (aaaa-mm-jj, vide = tous)" inputmode="numeric" autocomplete="off"><button class="btn small" id="plAjouter">Ajouter</button></div>
+        <div id="plMsg"></div><div id="plListe"></div>
+    </details>
+
     <div id="groupe" hidden></div>
 
     <div id="fiche" role="dialog" aria-modal="true" aria-label="Fiche du clip">
@@ -204,6 +212,53 @@ const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 
 function note(text, kind) { $('msg').innerHTML = text ? `<div class="note ${kind || ''}">${esc(text)}</div>` : ''; }
 
 let G = null, F = {}, V = {}, AP = {}, VER = {}, Q = {}, QUAL = {}, RD = {}, REDGEN = {actif: false, crf: 30};   // Q : qualité choisie par clip ; QUAL : qualités lues par vidéo   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
+
+// ---- Playlists Deezer ----
+let PL = [], plSuivi = null;
+const plNote = (t, k) => { $('plMsg').innerHTML = t ? `<div class="note ${k || ''}">${esc(t)}</div>` : ''; };
+const PL_TXT = {clip: '🎬 Clip trouvé', deja: '✔ Déjà dans ta médiathèque', sans_clip: 'Aucun clip officiel trouvé', artiste_inconnu: 'Artiste introuvable dans MusicBrainz', version: 'Version alternative (remix, live…) : ignorée'};
+function plRendreResultat(p) {
+    const r = p.resultat, e = p.etat || {};
+    if (e.en_cours) return `<div class="muted">⏳ ${esc(e.message || '')} ${e.total ? `(${e.fait || 0} / ${e.total})` : ''} — tu peux quitter la page, ça continue sur le serveur.</div>`;
+    let h = e.erreur ? `<div class="note err">${esc(e.erreur)}</div>` : '';
+    if (!r) return h;
+    const par = k => r.lignes.filter(l => l.etat === k);
+    const ligne = l => `<div class="cand" ${l.etat === 'clip' ? `data-pl-ouvrir="${esc(l.mbid)}" data-pl-titre="${esc(l.clip)}"` : ''}><b>${esc(l.artiste)} — ${esc(l.titre)} <small>${l.clip ? esc(l.clip + (l.album ? ' · ' + l.album : '')) : ''}${l.incertain ? ' · artiste à vérifier (plusieurs fiches du même nom)' : ''}</small></b>${l.etat === 'clip' ? '<span class="pill">Ouvrir ›</span>' : ''}</div>`;
+    h += `<div class="muted" style="margin:6px 0">Vérifié le ${esc(r.date)} · ${r.lignes.length} morceau(x) ajouté(s) depuis le ${esc(r.depuis || 'début')}.</div>`;
+    ['clip', 'sans_clip', 'artiste_inconnu', 'deja', 'version'].forEach(k => {
+        const l = par(k); if (!l.length) return;
+        h += `<details ${k === 'clip' ? 'open' : ''}><summary><b>${PL_TXT[k]} (${l.length})</b></summary>${l.map(ligne).join('')}</details>`;
+    });
+    if (!r.lignes.length) h += '<div class="muted">Aucun nouveau morceau depuis cette date.</div>';
+    return h;
+}
+function plDessiner() {
+    $('plListe').innerHTML = PL.map(p => `<div class="panel" style="margin:8px 0" data-pl="${esc(p.id)}"><b>${esc(p.nom)}</b> <small class="muted">${p.nb} morceaux · depuis le ${esc(p.depuis || 'début')}</small>
+        <div class="toolbar" style="margin:6px 0"><button class="btn small" data-pl-act="chercher">🔍 Chercher les nouveaux morceaux</button> <button class="btn small ghost" data-pl-act="vu">✅ Tout marquer comme vu</button> <button class="btn small ghost" data-pl-act="date">📅 Changer la date</button> <button class="btn small ghost" data-pl-act="retirer">🗑 Retirer</button></div>
+        <div>${plRendreResultat(p)}</div></div>`).join('') || '<div class="muted">Aucune playlist pour l\'instant.</div>';
+}
+async function plCharger() {
+    const d = await api('/api/playlists'); if (d.error) return plNote(d.error, 'err');
+    PL = d.playlists || []; plDessiner();
+    clearTimeout(plSuivi); if (PL.some(p => (p.etat || {}).en_cours)) plSuivi = setTimeout(plCharger, 3000);
+}
+$('plAjouter').onclick = async () => {
+    plNote('Lecture de la playlist…');
+    const d = await post('/api/playlists/ajouter', {lien: $('plLien').value, depuis: $('plDepuis').value});
+    if (d.error) return plNote(d.error, 'err');
+    $('plLien').value = ''; plNote(''); plCharger();
+};
+$('plListe').onclick = async e => {
+    const o = e.target.closest('[data-pl-ouvrir]');
+    if (o) { await ouvrir(o.dataset.plOuvrir); selectionnerSeul(o.dataset.plTitre); $('groupe').scrollIntoView({behavior: 'smooth'}); return; }
+    const b = e.target.closest('[data-pl-act]'); if (!b) return;
+    const id = b.closest('[data-pl]').dataset.pl, act = b.dataset.plAct;
+    if (act === 'chercher') { await post('/api/playlists/' + id + '/chercher'); plCharger(); }
+    else if (act === 'vu') { if (confirm('Marquer tous les morceaux actuels comme vus ? La prochaine recherche ne montrera que ceux ajoutés à partir d\'aujourd\'hui.')) { await post('/api/playlists/' + id + '/depuis', {aujourdhui: true}); plCharger(); } }
+    else if (act === 'date') { const v = prompt('Chercher les morceaux ajoutés depuis le (aaaa-mm-jj) :', (PL.find(p => p.id === id) || {}).depuis || ''); if (v !== null) { const d = await post('/api/playlists/' + id + '/depuis', {depuis: v}); if (d.error) plNote(d.error, 'err'); plCharger(); } }
+    else if (act === 'retirer') { if (confirm('Retirer cette playlist de MouFlip ? (rien n\'est supprimé chez Deezer)')) { await post('/api/playlists/' + id + '/retirer'); plCharger(); } }
+};
+plCharger();
 
 async function chercher() {
     const q = $('q').value.trim(); if (q.length < 2) return;
