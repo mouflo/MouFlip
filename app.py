@@ -381,17 +381,25 @@ def _chercher_clips_playlist(pid: str, depuis: str):
                 ligne["etat"] = "version"
             else:
                 cle = noms.normaliser(m["artiste"])
-                if cle not in artistes:
-                    trouves = [g for g in sources.chercher_groupes(m["artiste"], 8) if noms.normaliser(g["nom"]) == cle]
-                    artistes[cle] = {"mbid": trouves[0]["mbid"], "nom": trouves[0]["nom"], "incertain": len(trouves) > 1} if trouves else None
+                if cle not in artistes or (artistes[cle] and artistes[cle].get("incertain") and "candidats" not in artistes[cle]):
+                    trouves = [g for g in sources.chercher_groupes(m["artiste"], 12) if noms.normaliser(g["nom"]) == cle]
+                    artistes[cle] = {"mbid": trouves[0]["mbid"], "nom": trouves[0]["nom"], "incertain": len(trouves) > 1,
+                                     "candidats": [g["mbid"] for g in trouves[:6]]} if trouves else None
                     _ecrire_json(fichier_art, artistes)
                 a = artistes[cle]
                 if not a:
                     ligne["etat"] = "artiste_inconnu"
                 else:
-                    ligne["mbid"], ligne["incertain"] = a["mbid"], a["incertain"]
-                    g = _groupe_complet(a["mbid"])
-                    c = playlists.clip_du_morceau(m["titre"], g["clips"])
+                    # Plusieurs fiches du même nom (Rainbow GB, KR…) : on garde celle dont les clips contiennent ce morceau.
+                    mbid, g, c = a["mbid"], None, None
+                    for cand in (a.get("candidats") or [a["mbid"]]):
+                        gg = _groupe_complet(cand)
+                        cc = playlists.clip_du_morceau(m["titre"], gg["clips"])
+                        if g is None or cc:
+                            mbid, g, c = cand, gg, cc
+                        if cc:
+                            break
+                    ligne["mbid"], ligne["incertain"] = mbid, a["incertain"] and not c
                     if c:
                         ligne.update(etat="deja" if c["deja"] else "clip", clip=c["titre"], album=c.get("album", ""), deja=bool(c["deja"]))
                     else:
