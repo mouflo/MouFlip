@@ -196,6 +196,7 @@
         <div class="corps">
             <div class="muted" style="padding-top:8px">Le clip est d'abord préparé sur le serveur (meilleure qualité, volume réglé). Il n'entre dans « Video clip » que quand tu touches « Ranger ».</div>
             <div id="travauxListe"></div>
+            <div id="sonsListe"></div>
         </div>
     </div>
 </div>
@@ -326,6 +327,7 @@ function dessiner() {
             <span class="resume" id="nbCoches"></span>
             <button class="btn ghost small" id="toutCocher">Tout cocher</button><button class="btn ghost small" id="toutDecocher">Tout décocher</button>
             <button class="btn" id="telecharger">⬇️ Télécharger</button>
+            <button class="btn ghost small" id="sonLot" title="Récupère le son studio (MP3 ou M4A, au choix dans les réglages) des clips cochés">🎧 Son studio</button>
         </div>
         <div class="muted">${G.enregistre ? '📌 Liste enregistrée le ' + new Date(G.enregistre * 1000).toLocaleDateString('fr-FR') + ' (pas redemandée à chaque fois) · ' : ''}<a href="#" id="actualiser">🔄 Actualiser la liste</a></div>
         <div class="muted">Liste de MusicBrainz : elle peut être incomplète ou contenir des vidéos qui ne sont pas des clips ; ce sera affiné.</div>
@@ -383,6 +385,12 @@ function dessiner() {
     $('lireFormats').onclick = lireFormats;
     $('telecharger').onclick = telechargerCoches;
     document.querySelectorAll('[data-voir]').forEach(b => b.onclick = () => voir(Number(b.dataset.voir), b));
+    document.querySelectorAll('[data-son]').forEach(b => b.onclick = () => lancerSons([G.clips[Number(b.dataset.son)].titre]));
+    if ($('sonLot')) $('sonLot').onclick = () => {
+        const titres = visibles().filter(el => el.querySelector('input[type=checkbox]').checked).map(el => el.dataset.t);
+        if (!titres.length) return note('Coche d’abord les clips dont tu veux le son studio.', 'warn');
+        lancerSons(titres);
+    };
     if ($('bioPlus')) $('bioPlus').onclick = e => { e.preventDefault(); $('bio').classList.toggle('ouverte'); };
 }
 const visibles = () => [...document.querySelectorAll('.clip:not(.masque)')];       // seuls les clips AFFICHÉS comptent (recherche active : les autres sont masqués)
@@ -418,7 +426,7 @@ function ligne(c, i) {
         <div class="chemin"><a href="#" data-corriger="${i}">✏️ Corriger l’album ou l’année</a>${c.source === 'ajout' ? ` · <a href="#" data-retirer-ajout="${esc(c.titre)}">✕ Retirer ce clip ajouté à la main</a>` : ''}</div>
         <div class="chemin">${c.deja ? '📄 ' + esc(c.fichier_local) : '→ ' + esc(c.chemin_prevu)}</div>
         <div class="fmt" id="fmt${i}">${formatTxt(F[c.titre])}</div>
-        <div class="voir"><label class="red">📉 Taille : <select data-red="${i}">${optionsReduction(RD[c.titre] || 'defaut')}</select></label> <button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''} <span id="qp${i}">${Q[c.titre] ? '<span class="pill ok">qualité choisie : ' + esc(Q[c.titre].texte) + '</span>' : ''}</span><div id="voir${i}"></div></div></div>`;
+        <div class="voir"><label class="red">📉 Taille : <select data-red="${i}">${optionsReduction(RD[c.titre] || 'defaut')}</select></label> <button class="btn ghost small" data-voir="${i}">👁️ Voir le clip</button> <button class="btn ghost small" data-son="${i}" title="Le titre tel que le label l'a publié, sans bruits ni scènes">🎧 Son studio</button>${V[c.titre] ? ' <span class="pill ok">vidéo choisie</span>' : ''} <span id="qp${i}">${Q[c.titre] ? '<span class="pill ok">qualité choisie : ' + esc(Q[c.titre].texte) + '</span>' : ''}</span><div id="voir${i}"></div></div></div>`;
 }
 const NOMS_RED = {defaut: 'Selon le réglage', non: 'Ne pas réduire', tres_peu_de_perte: 'Très peu de perte (≈ 70 %)', leger: 'Équilibré (≈ 60 %)', plus_petit: 'Plus petit (≈ 40 %)'};
 const RATIO_RED = {tres_peu_de_perte: 0.70, leger: 0.60, plus_petit: 0.40};          // part de la taille d'origine, mesurée sur des clips entiers
@@ -609,20 +617,53 @@ async function telechargerCoches() {
     note(`${(d.travaux || []).length} clip(s) mis en file : l'avancement est dans la barre en bas (touche-la pour la déplier).`);
     suivreTravaux();
 }
+async function lancerSons(titres) {
+    note('Lancement…');
+    const d = await post('/api/sons', {mbid: G.fiche.mbid, titres});
+    if (d.error) return note(d.error, 'err');
+    note(`${d.ajoutes} son(s) studio mis en file : l’avancement est dans la barre en bas (rubrique 🎧). Rien n’est rangé dans ta Musique avant ton accord.`);
+    suivreTravaux();
+}
+const ETAT_SON = {attente: 'en attente', recherche: 'recherche', telechargement: 'téléchargement', conversion: 'conversion', volume: 'volume', pret: 'prêt à ranger', range: '✅ rangé', erreur: 'erreur', deja: 'déjà dans ta musique'};
+function carteSon(t) {
+    const actif = ['attente', 'recherche', 'telechargement', 'conversion', 'volume'].includes(t.etat);
+    return `<div class="job"><div class="titre">🎧 ${esc(t.artiste)} · ${esc(t.titre)} <span class="muted">${esc(t.album)}</span> <span class="pill ${t.etat === 'pret' || t.etat === 'range' ? 'ok' : t.etat === 'erreur' ? 'err' : actif ? 'warn' : ''}">${ETAT_SON[t.etat] || t.etat}</span></div>
+        <div class="muted">${esc(t.message || '')}</div>
+        <div class="acts">${t.etat === 'pret' ? `<button class="btn small" data-son-ranger="${t.id}">📁 Ranger dans Musique</button>` : ''}
+        ${t.etat === 'erreur' || t.etat === 'deja' ? `<button class="btn small ghost" data-son-relancer="${t.id}">↻ Relancer</button>` : ''}
+        ${actif ? '' : `<button class="btn small ghost" data-son-retirer="${t.id}">Retirer de la liste</button>`}</div></div>`;
+}
+async function suivreSons() {
+    const d = await api('/api/sons'); const l = d.sons || [];
+    const prets = l.filter(t => t.etat === 'pret'), actifs = l.filter(t => ['attente', 'recherche', 'telechargement', 'conversion', 'volume'].includes(t.etat));
+    $('sonsListe').innerHTML = l.length ? `<h4 style="margin:12px 0 4px">🎧 Sons studio <small class="muted">(${esc((d.reglage || {}).format || '').toUpperCase()} · rangés dans ${esc(d.racine || '')})</small></h4>
+        ${prets.length > 1 ? `<button class="btn small" id="sonsTous">📁 Ranger les ${prets.length} sons prêts</button>` : ''}${l.map(carteSon).join('')}` : '';
+    document.querySelectorAll('[data-son-ranger]').forEach(b => b.onclick = async () => {
+        const r = await post('/api/sons/' + b.dataset.sonRanger + '/ranger'); note(r.error || ('Rangé : ' + (r.chemin || '').split('/').pop() + (r.emby ? ' · ' + r.emby : '')), r.error ? 'err' : ''); suivreTravaux();
+    });
+    document.querySelectorAll('[data-son-relancer]').forEach(b => b.onclick = async () => { await post('/api/sons/' + b.dataset.sonRelancer + '/relancer'); suivreTravaux(); });
+    document.querySelectorAll('[data-son-retirer]').forEach(b => b.onclick = async () => { await post('/api/sons/' + b.dataset.sonRetirer + '/supprimer'); suivreTravaux(); });
+    if ($('sonsTous')) $('sonsTous').onclick = async () => {
+        if (!await MouConfirm(`Ranger ${prets.length} sons dans ta Musique ?\n\n` + prets.map(t => '• ' + t.artiste + ' — ' + t.titre).join('\n') + '\n\nAucun fichier existant n’est remplacé.', {ok: 'Ranger'})) return;
+        const r = await post('/api/sons/ranger_tous'); note(`${r.ranges} son(s) rangé(s)` + ((r.erreurs || []).length ? ' · ' + r.erreurs.join(' ; ') : ''), (r.erreurs || []).length ? 'warn' : ''); suivreTravaux();
+    };
+    return {n: l.length, prets: prets.length, actifs: actifs.length};
+}
 let _timerTravaux = null;
 async function suivreTravaux() {
     clearTimeout(_timerTravaux);
     const d = await api('/api/travaux');
     const liste = d.travaux || [];
-    $('travaux').hidden = !liste.length;
-    resumeTravaux(liste);
+    const son = await suivreSons();
+    $('travaux').hidden = !liste.length && !son.n;
+    resumeTravaux(liste, son);
     $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
     ajusterBas();
     document.querySelectorAll('[data-fiche]').forEach(b => b.onclick = () => ouvrirFiche(b.dataset.fiche));
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
     document.querySelectorAll('[data-relancer]').forEach(b => b.onclick = async () => { await post('/api/travaux/' + b.dataset.relancer + '/relancer'); suivreTravaux(); });
     document.querySelectorAll('[data-retirer]').forEach(b => b.onclick = async () => { const r = await post('/api/travaux/' + b.dataset.retirer + '/supprimer'); if (r.error) note(r.error, 'err'); suivreTravaux(); });
-    if (liste.some(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
+    if (son.actifs || liste.some(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat))) _timerTravaux = setTimeout(suivreTravaux, 2500);
 }
 
 // ============================ la fiche : tout ce qui sera visible dans Emby ============================
@@ -796,7 +837,7 @@ $('fichierImg').onchange = () => { const f = $('fichierImg').files[0]; if (f && 
 $('ficheRanger').onclick = async () => { if (!FI) return; const id = FI.id, nom = FI.clip.titre; if (await rangerClip(id, nom)) fermerFiche(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('fiche').classList.contains('ouvert')) fermerFiche(); });
 
-function resumeTravaux(liste) {
+function resumeTravaux(liste, son) {
     const actifs = liste.filter(t => ['attente', 'telechargement', 'reduction', 'audio'].includes(t.etat)), prets = liste.filter(t => t.etat === 'pret'),
           erreurs = liste.filter(t => t.etat === 'erreur'), ranges = liste.filter(t => t.etat === 'range');
     const enCours = actifs.find(t => t.etat !== 'attente') || actifs[0];
@@ -805,6 +846,7 @@ function resumeTravaux(liste) {
     if (prets.length) morceaux.push(`<b>${prets.length} prêt${prets.length > 1 ? 's' : ''} à ranger</b>`);
     if (erreurs.length) morceaux.push(`${erreurs.length} en erreur`);
     if (ranges.length) morceaux.push(`${ranges.length} rangé${ranges.length > 1 ? 's' : ''}`);
+    if (son && son.n) morceaux.push(`🎧 ${son.actifs ? son.actifs + ' en cours' : ''}${son.actifs && son.prets ? ', ' : ''}${son.prets ? son.prets + ' prêt' + (son.prets > 1 ? 's' : '') : ''}${!son.actifs && !son.prets ? son.n + ' son' + (son.n > 1 ? 's' : '') : ''}`);
     $('travauxResume').innerHTML = morceaux.join(' · ') + (enCours ? `<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(enCours.titre)} : ${esc(enCours.message || '')}</div><div class="mini"><i style="width:${enCours.progres || 0}%"></i></div>` : '');
     ajusterBas();
 }

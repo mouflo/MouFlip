@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import playlists, audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
+from src import playlists, sons, audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -419,6 +419,81 @@ def api_playlists_chercher(pid):
         _PL_ETAT[pid] = {"en_cours": True, "fait": 0, "total": 0, "message": "Lecture de la playlist chez Deezer…"}
     threading.Thread(target=_chercher_clips_playlist, args=(pid, p.get("depuis", "")), daemon=True).start()
     return jsonify({"ok": True})
+
+
+# ---- Son studio des clips (version « Topic » de YouTube) ------------------------------------------------------------------------------------------------
+def _reglage_son() -> dict:
+    c = ((CONFIG.get("clips") or {}).get("son") or {})
+    return {"format": c.get("format") if c.get("format") in sons.FORMATS else "m4a", "debit_m4a": c.get("debit_m4a", "256k"), "debit_mp3": c.get("debit_mp3", "320k"),
+            "dossier": c.get("dossier", "")}
+
+
+def _racine_musique() -> str:
+    return _reglage_son()["dossier"] or str(Path(DOSSIER_CLIPS).parent / "Musique")
+
+
+@app.route("/api/sons", methods=["GET", "POST"])
+def api_sons():
+    if request.method == "GET":
+        return jsonify({"sons": sorted(sons.lister(), key=lambda c: c.get("cree", 0)), "reglage": _reglage_son(), "racine": _racine_musique()})
+    b = request.get_json(silent=True) or {}
+    mbid = str(b.get("mbid", ""))
+    if not re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        return jsonify({"error": "Identifiant de groupe invalide."}), 400
+    try:
+        g = _groupe_complet(mbid)
+    except sources.SourceIndisponible as e:
+        return jsonify({"error": f"MusicBrainz est injoignable : {e}."}), 502
+    titres = {str(t) for t in b.get("titres", [])}
+    clips = [c for c in g["clips"] if c["titre"] in titres]
+    if not clips:
+        return jsonify({"error": "Aucun clip choisi."}), 400
+    for c in clips:
+        sons.ajouter(g["fiche"]["nom"], mbid, c, g["fiche"].get("alias", []))
+    return jsonify({"ok": True, "ajoutes": len(clips)})
+
+
+@app.route("/api/sons/<tid>/<action>", methods=["POST"])
+def api_sons_action(tid, action):
+    if action == "ranger":
+        r = sons.ranger(tid)
+    elif action == "relancer":
+        r = sons.relancer(tid)
+    elif action == "supprimer":
+        r = sons.supprimer(tid)
+    else:
+        return jsonify({"error": "Action inconnue."}), 404
+    return (jsonify(r), 200) if r.get("ok") else (jsonify({"error": r.get("error", "Impossible.")}), 400)
+
+
+@app.route("/api/sons/ranger_tous", methods=["POST"])
+def api_sons_ranger_tous():
+    return jsonify({"ok": True, **sons.ranger_tous()})
+
+
+@app.route("/api/settings/son", methods=["GET", "POST"])
+def api_settings_son():
+    if request.method == "GET":
+        return jsonify({**_reglage_son(), "racine": _racine_musique(), "racine_ok": Path(_racine_musique()).is_dir(), "aacgain": audio.aacgain_present()})
+    b = request.get_json(silent=True) or {}
+    fmt, d4, d3 = str(b.get("format", "")), str(b.get("debit_m4a", "256k")).lower(), str(b.get("debit_mp3", "320k")).lower()
+    dossier = str(b.get("dossier", "")).strip()
+    if fmt not in sons.FORMATS or d4 not in ("192k", "256k", "320k") or d3 not in ("192k", "256k", "320k"):
+        return jsonify({"ok": False, "error": "Format : m4a ou mp3 ; débit : 192k, 256k ou 320k."}), 400
+    if dossier and not Path(dossier).is_dir():
+        return jsonify({"ok": False, "error": "Ce dossier de musique n'existe pas (ou le partage n'est pas monté)."}), 400
+    import json
+    chemin = BASE_DIR / "config.json"
+    try:
+        cfg = json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else {}
+    except ValueError:
+        return jsonify({"ok": False, "error": "config.json est illisible : rien n'a été modifié."}), 500
+    cfg.setdefault("clips", {})["son"] = {"format": fmt, "debit_m4a": d4, "debit_mp3": d3, "dossier": dossier}
+    tmp = chemin.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, chemin)
+    CONFIG.setdefault("clips", {})["son"] = cfg["clips"]["son"]
+    return jsonify({"ok": True, "message": f"Enregistré : les prochains sons seront en {fmt.upper()}" + (f" ({d3})" if fmt == "mp3" else " (AAC de YouTube recopié sans perte)") + "."})
 
 
 @app.route("/api/groupe/<mbid>")
@@ -1156,9 +1231,10 @@ def api_cookies():
 import redemarrage
 redemarrage.init_app(app, BASE_DIR)
 import redemarrer
-redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe())
+redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe() + sons.occupe())
 images_perso.configurer(BASE_DIR / "data")
 travaux.emby_artiste_fn = lambda nom: emby_artistes.chercher(EMBY, nom)
+sons.configurer(BASE_DIR / "data", lambda: _racine_musique(), lambda: DOSSIER_CLIPS, _reglage_son, lambda: AUDIO["cible_db"], EMBY, sources.piste_dans_album, ecriture=False)
 travaux.configurer(BASE_DIR / "data", lambda: DOSSIER_CLIPS, lambda: AUDIO["cible_db"], lambda: AUDIO["debit"], EMBY, lambda: AUDIO["sans_perte"], lambda: REDUCTION, ecriture=False)
 diag.init_app(app, APP_VERSION, _roots, EMBY.describe, lambda: "aucun traitement en lot (lecture seule)")
 
@@ -1166,7 +1242,7 @@ def _mise_a_jour_ytdlp(premiere_attente=120, toutes=24 * 3600):
     """yt-dlp suit les changements de YouTube : mise à jour au démarrage puis chaque jour, jamais pendant un clip."""
     time.sleep(premiere_attente)
     while True:
-        while travaux.occupe():
+        while travaux.occupe() or sons.occupe():
             time.sleep(300)
         try:
             r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "yt-dlp", "yt-dlp-ejs"], capture_output=True, text=True, timeout=300)
@@ -1178,6 +1254,7 @@ def _mise_a_jour_ytdlp(premiere_attente=120, toutes=24 * 3600):
 
 if __name__ == "__main__":
     travaux.demarrer()
+    sons.demarrer()
     threading.Thread(target=_mise_a_jour_ytdlp, daemon=True, name="maj-ytdlp").start()
     redemarrage.verifier(BASE_DIR, "MouFlip", BASE_DIR / "data" / "mouflip.log", lambda t: None)
     app.run(debug=False, host="0.0.0.0", port=8004)

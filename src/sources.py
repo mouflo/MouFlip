@@ -417,3 +417,26 @@ def clips_mb(mbid: str, nom_groupe: str, decouverte=None) -> list[dict]:
         for c in sortie:
             c["avertissement"] = "albums non lus : " + erreurs_pistes
     return sortie
+
+
+_PISTES = {}
+
+
+def piste_dans_album(rg: str, titre: str) -> tuple[int, int] | None:
+    """(numéro de la piste, nombre de pistes) du morceau dans la première sortie officielle de ce groupe de sorties MusicBrainz."""
+    if rg not in _PISTES:
+        d = _get(f"{MB}/release-group/{rg}", {"inc": "releases", "fmt": "json"}) or {}
+        sorties = [r for r in d.get("releases", []) if r.get("status") == "Official"] or d.get("releases", [])
+        pistes = []
+        if sorties:
+            sorties.sort(key=lambda r: r.get("date") or "9999")
+            r = _get(f"{MB}/release/{sorties[0]['id']}", {"inc": "recordings", "fmt": "json"}) or {}
+            for m in r.get("media", []):
+                pistes += [t.get("title", "") for t in m.get("tracks", [])]
+        _PISTES[rg] = pistes
+    pistes = _PISTES[rg]
+    cle = normaliser(titre)
+    for i, t in enumerate(pistes, 1):
+        if normaliser(t) == cle:
+            return i, len(pistes)
+    return None
