@@ -671,9 +671,10 @@ function rendreFiche() {
         <h3>CD (cdart)</h3><div class="aide">« cdart.png ».</div>${bandeImages('carre', f.album.cdart, 'album_cdart')}
       </section>
       <section class="fi"><h3>📝 Le texte (biographie du groupe)</h3>
-        <div class="aide">Écrit dans « artist.nfo » (${g.biographie_source ? 'source : ' + esc(g.biographie_source) + ', ' : ''}langue : ${esc(g.biographie_langue === 'fr' ? 'français' : g.biographie_langue === 'en' ? 'anglais' : (g.biographie_langue || 'inconnue'))}). Tu peux le corriger avant de ranger.${g.artist_nfo_existe ? ' <b>artist.nfo existe déjà : il ne sera pas modifié.</b>' : ''}</div>
+        <div class="aide">Écrit dans « artist.nfo » (${g.biographie_source ? 'source : ' + esc(g.biographie_source) + ', ' : ''}langue : ${esc(g.biographie_langue === 'fr' ? 'français' : g.biographie_langue === 'en' ? 'anglais' : (g.biographie_langue || 'inconnue'))}). Tu peux le corriger avant de ranger.${g.artist_nfo_existe ? ' <b>artist.nfo existe déjà : il ne sera pas modifié, donc ce texte ne sera pas écrit.</b>' : ''}</div>
         <textarea class="fi-bio" id="ficheBio" spellcheck="false">${esc(g.biographie)}</textarea>
-        <div style="margin-top:6px"><button class="btn small ghost" id="ficheBioReset">↺ Texte d'origine</button></div>
+        <div style="margin-top:6px"><button class="btn small ghost" id="ficheBioReset">↺ Texte trouvé sur Internet</button>${g.artist_nfo_existe ? ' <button class="btn small ghost" id="ficheBioMedia">📂 Voir celle de ma médiathèque</button>' : ''}</div>
+        ${g.artist_nfo_existe ? `<div id="ficheBioExistante" hidden style="margin-top:8px"><div class="aide">Texte de ton « artist.nfo » actuel (lecture seule, jamais modifié) :</div><div class="fi-bio" style="white-space:pre-wrap;overflow:auto;max-height:260px">${g.biographie_existante ? esc(g.biographie_existante) : '<i>Ce fichier ne contient pas de biographie.</i>'}</div></div>` : ''}
       </section>
       <section class="fi"><h3>📄 Fichiers .nfo</h3>
         <details><summary style="cursor:pointer">Voir le .nfo du clip</summary><div class="fi-nfo">${esc(c.nfo)}</div></details>
@@ -707,6 +708,7 @@ function rendreFiche() {
     $('edOk').onclick = () => choixFiche({edition: {titre: $('edTitre').value, album: $('edAlbum').value, annee: $('edAnnee').value}});
     const bio = $('ficheBio'); if (bio) bio.onchange = () => choixFiche({biographie: bio.value === g.biographie_defaut ? null : bio.value}, true);
     $('ficheBioReset').onclick = () => choixFiche({biographie: null});
+    if ($('ficheBioMedia')) $('ficheBioMedia').onclick = () => { const z = $('ficheBioExistante'); z.hidden = !z.hidden; $('ficheBioMedia').textContent = z.hidden ? '📂 Voir celle de ma médiathèque' : '📂 Masquer celle de ma médiathèque'; };
     corps.querySelectorAll('[data-artiste]').forEach(b => b.onclick = () => choixFiche({artiste: b.dataset.artiste || null}));
 }
 async function envoyerImage(type, fichier, lien) {

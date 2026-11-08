@@ -496,7 +496,7 @@ def fiche(tid) -> dict | None:
         "groupe": {"nom": c["groupe"], "pays": (ctx.get("fiche") or {}).get("pays", ""), "debut": (ctx.get("fiche") or {}).get("debut", ""),
                    "genre": ctx.get("genre", ""), "biographie": bio, "biographie_defaut": ctx.get("biographie", ""),
                    "biographie_langue": ctx.get("biographie_langue", ""), "biographie_source": ctx.get("biographie_source", ""), "dossier": str(groupe), "dossier_existe": groupe.exists(),
-                   "artist_nfo_existe": (groupe / "artist.nfo").exists(), "images": groupe_images, "fanart": {
+                   "artist_nfo_existe": (groupe / "artist.nfo").exists(), "biographie_existante": nfo.lire_biographie(groupe / "artist.nfo") if (groupe / "artist.nfo").exists() else "", "images": groupe_images, "fanart": {
                        "candidats": _candidats(c, "fanart"), "choisis": choix.get("images", {}).get("fanart"), "existants": fonds_existants,
                        "libres": sum(1 for f in fonds_existants if not f["present"])}},
         "album": albums,

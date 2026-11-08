@@ -900,3 +900,16 @@ class BiographieTest(unittest.TestCase):
             self.assertEqual(sources.pages_wikipedia({"liens": {"wikidata": "https://www.wikidata.org/wiki/Q1"}}),
                              {"fr": "IU_(chanteuse)", "en": "IU_(singer)"})
         self.assertEqual(sources.pages_wikipedia({"liens": {"wikipedia": "https://fr.wikipedia.org/wiki/Aespa_%28groupe%29"}}), {"fr": "Aespa_(groupe)"})
+
+
+class LireBiographieNfoTest(unittest.TestCase):
+    def test_cdata_bom_et_absent(self):
+        from src import nfo
+        d = tempfile.mkdtemp()
+        f = Path(d) / "artist.nfo"
+        f.write_bytes("﻿<?xml version='1.0' encoding='utf-8'?><artist><biography><![CDATA[Texte <ok> & plus]]></biography></artist>".encode("utf-8"))
+        self.assertEqual(nfo.lire_biographie(f), "Texte <ok> & plus")
+        f.write_text("<artist><biography></biography></artist>", encoding="utf-8")
+        self.assertEqual(nfo.lire_biographie(f), "")
+        self.assertEqual(nfo.lire_biographie(Path(d) / "absent.nfo"), "")
+        f.unlink(); Path(d).rmdir()

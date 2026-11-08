@@ -40,3 +40,21 @@ def nfo_artiste(nom, mbid, genre, pays_code, debut, biographie, vignette_url, ch
                       f"    <formed>{escape(fonde)}</formed>", f"    <biography>{escape(biographie or '')}</biography>", "    <died></died>", "    <disbanded></disbanded>",
                       f'    <thumb preview="{escape(vignette_url)}/preview">{escape(vignette_url)}</thumb>' if vignette_url else "    <thumb />",
                       f"    <path>{escape(chemin)}</path>", "    <fanart />", "</artist>", ""])
+
+
+def lire_biographie(chemin) -> str:
+    """Le texte « biography » d'un artist.nfo déjà dans la médiathèque (lecture seule, jamais modifié) ; « » s'il manque ou est illisible."""
+    import re
+    import xml.etree.ElementTree as ET
+    try:
+        brut = open(chemin, "rb").read().decode("utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+    try:
+        t = (ET.fromstring(brut.encode("utf-8")).findtext("biography") or "").strip()
+        if t:
+            return t
+    except ET.ParseError:
+        pass
+    m = re.search(r"<biography>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</biography>", brut, re.S)
+    return (m.group(1).strip() if m else "")

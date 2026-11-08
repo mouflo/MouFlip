@@ -2,6 +2,7 @@
 
 ## [0.1] - 2026-11-07
 Première version de MouFlip (clips vidéo K-pop pour Emby).
+- 📂 **Biographie de ta médiathèque** : quand `artist.nfo` existe, la fiche propose « Voir celle de ma médiathèque » (lecture seule) et dit que le texte de la case ne sera pas écrit ; le bouton de retour devient « Texte trouvé sur Internet ».
 - 📖 **Biographie en français d'abord** : TheAudioDB en français, sinon Wikipédia en français (page retrouvée par le lien exact de MusicBrainz / Wikidata, pas par le nom seul), sinon l'anglais. La fiche indique la source et la langue.
 - ✏️ **Fiche modifiable avant le rangement** : titre, album et année se corrigent dans la fiche (dossier, nom du fichier, .nfo et pochette suivent). Les cases des clips sont **décochées par défaut**.
 - 🔎 **Recherche d'un groupe** (MusicBrainz) : fiche, albums, liste de ses clips officiels (sans remix, versions, chorégraphies, concerts ni coulisses). La liste trouvée est **enregistrée** sur le serveur et réutilisée ; « 🔄 Actualiser la liste » la redemande. Si MusicBrainz est en panne, la liste enregistrée sert quand même.
