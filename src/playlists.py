@@ -103,11 +103,30 @@ def version_alternative(titre: str) -> bool:
     return bool(ALTERNATIVES.search(" ".join(re.findall(r"[\(\[]([^)\]]*)[\)\]]", titre or "")) + " " + (titre.split(" - ", 1)[1] if " - " in (titre or "") else "")))
 
 
+def _cles(titre: str) -> set[str]:
+    """Les titres « nus » d'un intitulé : « How Come? / 어쩌다－(video clip) » donne « how come » et « 어쩌다 » (titres doubles séparés par « / »)."""
+    t = re.sub(r"[\(\[]\s*(official\s+)?(music\s+)?(video\s*clip|video|mv|m/v)[^)\]]*[\)\]]", " ", titre or "", flags=re.I)
+    morceaux = [x for x in re.split(r"\s/\s|／", t)] if re.search(r"\s/\s|／", t) else [t]
+    return {k for k in (titre_cle(x) for x in morceaux) if len(k) >= 2}
+
+
 def clip_du_morceau(titre: str, clips: list[dict]) -> dict | None:
-    cle = titre_cle(titre)
-    if len(cle) < 2:
+    cles = _cles(titre)
+    if not cles:
         return None
     for c in clips:
-        if titre_cle(c["titre"]) == cle:
+        if cles & _cles(c["titre"]):
             return c
     return None
+
+
+def variantes_artiste(nom: str) -> list[str]:
+    """« 레이디스 코드 (LADIES\` CODE) » : le nom entier, puis chaque partie (hors et dans la parenthèse)."""
+    nom = (nom or "").replace("`", "'").replace("’", "'")
+    sortie = [nom.strip()]
+    dehors = re.sub(r"\([^)]*\)", " ", nom).strip()
+    dedans = re.findall(r"\(([^)]*)\)", nom)
+    for x in [dehors] + [d.strip() for d in dedans]:
+        if x and x not in sortie:
+            sortie.append(x)
+    return sortie

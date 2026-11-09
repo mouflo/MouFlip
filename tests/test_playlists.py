@@ -68,3 +68,15 @@ class TravailPlaylistTest(unittest.TestCase):
         self.assertEqual([l["etat"] for l in r["lignes"]], ["clip", "version", "sans_clip", "artiste_inconnu", "deja"])
         self.assertEqual(r["lignes"][0]["clip"], "Spicy")
         self.assertFalse(app._PL_ETAT["9"]["en_cours"])
+
+
+class TestTitresDoubles(unittest.TestCase):
+    def test_titre_double_et_video_clip(self):
+        from src import playlists
+        c = playlists.clip_du_morceau("어쩌다", [{"titre": "How Come? / 어쩌다－(video clip)"}])
+        self.assertIsNotNone(c)
+        self.assertIsNone(playlists.clip_du_morceau("Autre", [{"titre": "How Come? / 어쩌다－(video clip)"}]))
+
+    def test_variantes_artiste(self):
+        from src import playlists
+        self.assertEqual(playlists.variantes_artiste("레이디스 코드 (LADIES` CODE)")[1:], ["레이디스 코드", "LADIES' CODE"])

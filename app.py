@@ -381,13 +381,19 @@ def _chercher_clips_playlist(pid: str, depuis: str):
                 ligne["etat"] = "version"
             else:
                 cle = noms.normaliser(m["artiste"])
-                if cle not in artistes or (artistes[cle] and artistes[cle].get("incertain") and "candidats" not in artistes[cle]):
-                    trouves = [g for g in sources.chercher_groupes(m["artiste"], 12) if noms.normaliser(g["nom"]) == cle]
+                ancien = artistes.get(cle, "absent")
+                if ancien == "absent" or ancien is None or (ancien.get("incertain") and "candidats" not in ancien):
+                    trouves = []
+                    for variante in playlists.variantes_artiste(m["artiste"]):
+                        vc = noms.normaliser(variante)
+                        trouves = [g for g in sources.chercher_groupes(variante, 12) if g.get("exact") or noms.normaliser(g["nom"]) == vc]
+                        if trouves:
+                            break
                     artistes[cle] = {"mbid": trouves[0]["mbid"], "nom": trouves[0]["nom"], "incertain": len(trouves) > 1,
-                                     "candidats": [g["mbid"] for g in trouves[:6]]} if trouves else None
+                                     "candidats": [g["mbid"] for g in trouves[:6]]} if trouves else {"absent": True}
                     _ecrire_json(fichier_art, artistes)
                 a = artistes[cle]
-                if not a:
+                if not a or a.get("absent"):
                     ligne["etat"] = "artiste_inconnu"
                 else:
                     # Plusieurs fiches du même nom (Rainbow GB, KR…) : on garde celle dont les clips contiennent ce morceau.

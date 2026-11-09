@@ -97,7 +97,9 @@ def chercher_groupes(nom: str, limite: int = 30) -> list[dict]:
         noms = [a.get("name", "")] + [x.get("name", "") for x in a.get("aliases", []) or []]
         normes = [normaliser(x) or x.lower() for x in noms if x]
         rang = 0 if voulu in normes else 1 if any(n.startswith(voulu + " ") or n.startswith(voulu) for n in normes[:1]) else 2
-        resultats.append((rang, -(a.get("score") or 0), _resume_artiste(a)))
+        resume = _resume_artiste(a)
+        resume["exact"] = rang == 0                                  # même nom OU même alias (9MUSES = Nine Muses)
+        resultats.append((rang, -(a.get("score") or 0), resume))
     resultats.sort(key=lambda x: (x[0], x[1]))
     return [r[2] for r in resultats[:limite]]
 
