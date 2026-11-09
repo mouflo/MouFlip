@@ -210,6 +210,14 @@ async function api(url, opts) {
     return d;
 }
 const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+// Réécrire une zone qui se rafraîchit toute seule SANS casser la sélection de texte (copier-coller) :
+// rien n'est réécrit si le contenu est identique, ni pendant qu'une sélection touche la zone (elle se met à jour juste après).
+function maj(el, html) {
+    if (el._html === html) return false;
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed && sel.rangeCount && (el.contains(sel.anchorNode) || el.contains(sel.focusNode))) return false;
+    el._html = html; el.innerHTML = html; return true;
+}
 function note(text, kind) { $('msg').innerHTML = text ? `<div class="note ${kind || ''}">${esc(text)}</div>` : ''; }
 
 let G = null, F = {}, V = {}, AP = {}, VER = {}, Q = {}, QUAL = {}, RD = {}, REDGEN = {actif: false, crf: 30};   // Q : qualité choisie par clip ; QUAL : qualités lues par vidéo   // groupe affiché, formats lus (titre -> résultat), vidéo choisie (titre -> id), aperçus (titre -> candidats)
@@ -234,9 +242,9 @@ function plRendreResultat(p) {
     return h;
 }
 function plDessiner() {
-    $('plListe').innerHTML = PL.map(p => `<div class="panel" style="margin:8px 0" data-pl="${esc(p.id)}"><b>${esc(p.nom)}</b> <small class="muted">${p.nb} morceaux · depuis le ${esc(p.depuis || 'début')}</small>
+    maj($('plListe'), PL.map(p => `<div class="panel" style="margin:8px 0" data-pl="${esc(p.id)}"><b>${esc(p.nom)}</b> <small class="muted">${p.nb} morceaux · depuis le ${esc(p.depuis || 'début')}</small>
         <div class="toolbar" style="margin:6px 0"><button class="btn small" data-pl-act="chercher">🔍 Chercher les nouveaux morceaux</button> <button class="btn small ghost" data-pl-act="vu">✅ Tout marquer comme vu</button> <button class="btn small ghost" data-pl-act="date">📅 Changer la date</button> <button class="btn small ghost" data-pl-act="retirer">🗑 Retirer</button></div>
-        <div>${plRendreResultat(p)}</div></div>`).join('') || '<div class="muted">Aucune playlist pour l\'instant.</div>';
+        <div>${plRendreResultat(p)}</div></div>`).join('') || '<div class="muted">Aucune playlist pour l\'instant.</div>');
 }
 async function plCharger() {
     const d = await api('/api/playlists'); if (d.error) return plNote(d.error, 'err');
@@ -636,8 +644,8 @@ function carteSon(t) {
 async function suivreSons() {
     const d = await api('/api/sons'); const l = d.sons || [];
     const prets = l.filter(t => t.etat === 'pret'), actifs = l.filter(t => ['attente', 'recherche', 'telechargement', 'conversion', 'volume'].includes(t.etat));
-    $('sonsListe').innerHTML = l.length ? `<h4 style="margin:12px 0 4px">🎧 Sons studio <small class="muted">(${esc((d.reglage || {}).format || '').toUpperCase()} · rangés dans ${esc(d.racine || '')})</small></h4>
-        ${prets.length > 1 ? `<button class="btn small" id="sonsTous">📁 Ranger les ${prets.length} sons prêts</button>` : ''}${l.map(carteSon).join('')}` : '';
+    maj($('sonsListe'), l.length ? `<h4 style="margin:12px 0 4px">🎧 Sons studio <small class="muted">(${esc((d.reglage || {}).format || '').toUpperCase()} · rangés dans ${esc(d.racine || '')})</small></h4>
+        ${prets.length > 1 ? `<button class="btn small" id="sonsTous">📁 Ranger les ${prets.length} sons prêts</button>` : ''}${l.map(carteSon).join('')}` : '');
     document.querySelectorAll('[data-son-ranger]').forEach(b => b.onclick = async () => {
         const r = await post('/api/sons/' + b.dataset.sonRanger + '/ranger'); note(r.error || ('Rangé : ' + (r.chemin || '').split('/').pop() + (r.emby ? ' · ' + r.emby : '')), r.error ? 'err' : ''); suivreTravaux();
     });
@@ -657,7 +665,7 @@ async function suivreTravaux() {
     const son = await suivreSons();
     $('travaux').hidden = !liste.length && !son.n;
     resumeTravaux(liste, son);
-    $('travauxListe').innerHTML = (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join('');
+    maj($('travauxListe'), (d.place_go != null ? `<div class="muted" style="margin:6px 0">Place libre sur le serveur : ${d.place_go} Go</div>` : '') + liste.map(carteTravail).join(''));
     ajusterBas();
     document.querySelectorAll('[data-fiche]').forEach(b => b.onclick = () => ouvrirFiche(b.dataset.fiche));
     document.querySelectorAll('[data-ranger]').forEach(b => b.onclick = () => ranger(b.dataset.ranger, b.dataset.nom));
@@ -847,7 +855,7 @@ function resumeTravaux(liste, son) {
     if (erreurs.length) morceaux.push(`${erreurs.length} en erreur`);
     if (ranges.length) morceaux.push(`${ranges.length} rangé${ranges.length > 1 ? 's' : ''}`);
     if (son && son.n) morceaux.push(`🎧 ${son.actifs ? son.actifs + ' en cours' : ''}${son.actifs && son.prets ? ', ' : ''}${son.prets ? son.prets + ' prêt' + (son.prets > 1 ? 's' : '') : ''}${!son.actifs && !son.prets ? son.n + ' son' + (son.n > 1 ? 's' : '') : ''}`);
-    $('travauxResume').innerHTML = morceaux.join(' · ') + (enCours ? `<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(enCours.titre)} : ${esc(enCours.message || '')}</div><div class="mini"><i style="width:${enCours.progres || 0}%"></i></div>` : '');
+    maj($('travauxResume'), morceaux.join(' · ') + (enCours ? `<div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(enCours.titre)} : ${esc(enCours.message || '')}</div><div class="mini"><i style="width:${enCours.progres || 0}%"></i></div>` : ''));
     ajusterBas();
 }
 function ajusterBas() {                                                // la page garde de la place sous le contenu : rien n'est caché par la barre
