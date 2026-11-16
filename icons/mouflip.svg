@@ -3,21 +3,16 @@
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a2d31"/><stop offset="1" stop-color="#121315"/></linearGradient>
     <linearGradient id="gr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8be083"/><stop offset="1" stop-color="#52b54b"/></linearGradient>
     <clipPath id="barre"><rect x="104" y="112" width="304" height="68" rx="16"/></clipPath>
+    <g id="note"><ellipse cx="0" cy="62" rx="36" ry="27" transform="rotate(-18 0 62)"/><path d="M30 52 V-64 Q34 -2 92 22" fill="none" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 52 V-64" fill="none" stroke-width="18" stroke-linecap="round"/></g>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <rect x="6" y="6" width="500" height="500" rx="106" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="4"/>
-  <!-- corps du clap -->
   <rect x="104" y="204" width="304" height="206" rx="28" fill="none" stroke="#f3f3f3" stroke-width="24"/>
-  <!-- barre du clap, légèrement ouverte, rayée -->
   <g transform="rotate(-9 104 196)">
     <rect x="104" y="112" width="304" height="68" rx="16" fill="#f3f3f3"/>
     <g clip-path="url(#barre)" fill="#2a2d31">
-      <path d="M150 112 h40 l-34 68 h-40 z"/>
-      <path d="M242 112 h40 l-34 68 h-40 z"/>
-      <path d="M334 112 h40 l-34 68 h-40 z"/>
-      <path d="M426 112 h40 l-34 68 h-40 z"/>
+      <path d="M150 112 h40 l-34 68 h-40 z"/><path d="M242 112 h40 l-34 68 h-40 z"/><path d="M334 112 h40 l-34 68 h-40 z"/><path d="M426 112 h40 l-34 68 h-40 z"/>
     </g>
   </g>
-  <!-- flèche de lecture -->
-  <path d="M226 262 V356 L312 309 Z" fill="url(#gr)" stroke="url(#gr)" stroke-width="22" stroke-linejoin="round"/>
+  <use href="#note" transform="translate(236 306) scale(.95)" fill="url(#gr)" stroke="url(#gr)"/>
 </svg>
