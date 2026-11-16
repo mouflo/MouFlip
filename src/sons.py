@@ -220,6 +220,46 @@ def _dossier_artiste(c) -> Path:
     return existants.dossier_du_groupe(racine, [c["artiste"]] + c.get("alias", [])) or (racine / propre(c["artiste"]))
 
 
+def _nom_artiste(c) -> str:
+    """Le nom sous lequel l'artiste est DÉJÀ connu dans ta musique : celui de son dossier (« Rainbow (레인보우) »), pour que les étiquettes et le nom du
+    fichier soient ceux de ses autres morceaux. Sans dossier, le nom du groupe. Sans cela Emby voit un second artiste « Rainbow » et le rattache à un autre
+    groupe (le rock britannique de Ritchie Blackmore) : constaté le 15/11/2026 avec « Black Swan »."""
+    d = _dossier_artiste(c)
+    return d.name if d.is_dir() else c["artiste"]
+
+
+def _ids_musicbrainz(c) -> dict:
+    ids = {"MusicBrainz Artist Id": c.get("mbid"), "MusicBrainz Album Artist Id": c.get("mbid"), "MusicBrainz Release Group Id": c.get("rg")}
+    return {k: v for k, v in ids.items() if v}
+
+
+def etiqueter_ids(chemin, ids: dict, artiste: str = ""):
+    """Écrit les identifiants MusicBrainz (et, si donné, le nom d'artiste) dans un fichier m4a ou mp3, sans toucher au son. ffmpeg ne sait pas écrire ces
+    étiquettes en m4a : mutagen. Emby s'en sert pour reconnaître l'artiste au lieu de le deviner d'après son nom."""
+    p = str(chemin)
+    if p.lower().endswith((".m4a", ".mp4")):
+        from mutagen.mp4 import MP4, MP4FreeForm
+        f = MP4(p)
+        for k, v in ids.items():
+            f["----:com.apple.iTunes:" + k] = [MP4FreeForm(str(v).encode("utf-8"))]
+        if artiste:
+            f["\xa9ART"], f["aART"] = [artiste], [artiste]
+        f.save()
+    else:
+        from mutagen.id3 import ID3, ID3NoHeaderError, TPE1, TPE2, TXXX
+        try:
+            t = ID3(p)
+        except ID3NoHeaderError:
+            t = ID3()
+        for k, v in ids.items():
+            t.delall("TXXX:" + k)
+            t.add(TXXX(encoding=3, desc=k, text=[str(v)]))
+        if artiste:
+            t.setall("TPE1", [TPE1(encoding=3, text=[artiste])])
+            t.setall("TPE2", [TPE2(encoding=3, text=[artiste])])
+        t.save(p, v2_version=3)
+
+
 def _deja_dans_la_musique(c) -> str:
     """Un morceau de ce titre existe déjà dans le dossier de l'artiste (au plus 2 niveaux) : chemin, sinon ''."""
     d = _dossier_artiste(c)
@@ -281,9 +321,13 @@ def _preparer(c):
     _maj(c, etat="conversion", message="Conversion et étiquettes…", piste=num, pistes=total, format=fmt)
     final = rep / f"final.{fmt}"
     methode = convertir(sources_[0], final, fmt, reglage["debit_mp3"] if fmt == "mp3" else reglage["debit_m4a"],
-                        {"title": c["titre"], "artist": c["artiste"], "album_artist": c["artiste"], "album": c["album"], "date": c["annee"], "track": f"{num}/{total}"})
+                        {"title": c["titre"], "artist": _nom_artiste(c), "album_artist": _nom_artiste(c), "album": c["album"], "date": c["annee"], "track": f"{num}/{total}"})
     _maj(c, etat="volume", message="Réglage du volume…")
     vol = regler_volume(final, _CFG["cible"](), reglage["debit_m4a"])
+    try:                                                               # l'artiste est reconnu par son identifiant : sans lui, Emby devine (et se trompe)
+        etiqueter_ids(final, _ids_musicbrainz(c))
+    except Exception as e:
+        raise SonError(f"étiquettes MusicBrainz impossibles : {str(e)[:150]}")
     for p in sources_:
         p.unlink(missing_ok=True)
     info = _sonder(final)
@@ -361,7 +405,7 @@ def plan(c) -> dict:
         album = next((a for a in sorted(d.iterdir()) if a.is_dir() and a.name != "@eaDir" and normaliser(a.name) == normaliser(c["album"])), None)
     album = album or d / propre(c["album"])
     ext = Path(c.get("fichier", "x.m4a")).suffix
-    nom = propre(f"{c['artiste']} - {c['album']} - {int(c.get('piste') or 1):02d} - {c['titre']}") + ext
+    nom = propre(f"{_nom_artiste(c)} - {c['album']} - {int(c.get('piste') or 1):02d} - {c['titre']}") + ext
     return {"dossier_artiste": str(d), "dossier_album": str(album), "chemin": str(album / nom), "album_nouveau": not album.exists(), "existe": (album / nom).exists()}
 
 

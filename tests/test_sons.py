@@ -108,5 +108,70 @@ class RangementSonTest(unittest.TestCase):
         self.assertEqual(sons.SONS[a["id"]]["etat"], "attente")
 
 
+def _faire_audio(chemin: Path):
+    import shutil
+    import subprocess
+    if not shutil.which("ffmpeg"):
+        raise unittest.SkipTest("ffmpeg absent")
+    codec = ["-c:a", "libmp3lame"] if str(chemin).endswith(".mp3") else ["-c:a", "aac"]
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", *codec, str(chemin)], capture_output=True)
+    if r.returncode:
+        raise unittest.SkipTest("encodeur indisponible")
+
+
+class NomDeLArtisteTest(unittest.TestCase):
+    """« Rainbow » (le groupe cherché) contre « Rainbow (레인보우) » (le dossier, donc l'artiste connu d'Emby) : 15/11/2026."""
+
+    def _son(self, tmp):
+        _cfg(tmp)
+        return sons.ajouter("Rainbow", "64af8439-3319-4ad5-847c-79f828603427", {"titre": "Black Swan", "album": "INNOCENT", "annee": "2015", "rg": "b2c1c411",
+                                                                              "duree": 217}, ["레인보우", "Rainbow"])
+
+    def test_le_nom_du_dossier_existant_sert_aux_etiquettes_et_au_fichier(self):
+        tmp = Path(tempfile.mkdtemp())
+        c = self._son(tmp)
+        (tmp / "musique" / "Rainbow (레인보우)").mkdir()
+        self.assertEqual(sons._nom_artiste(c), "Rainbow (레인보우)")
+        c["piste"], c["fichier"] = 2, "x.m4a"
+        self.assertTrue(sons.plan(c)["chemin"].endswith("/Rainbow (레인보우)/INNOCENT/Rainbow (레인보우) - INNOCENT - 02 - Black Swan.m4a"))
+
+    def test_sans_dossier_le_nom_du_groupe(self):
+        tmp = Path(tempfile.mkdtemp())
+        c = self._son(tmp)
+        self.assertEqual(sons._nom_artiste(c), "Rainbow")
+
+    def test_les_identifiants_musicbrainz_sont_ceux_du_groupe_choisi(self):
+        c = self._son(Path(tempfile.mkdtemp()))
+        ids = sons._ids_musicbrainz(c)
+        self.assertEqual(ids["MusicBrainz Artist Id"], "64af8439-3319-4ad5-847c-79f828603427")
+        self.assertEqual(ids["MusicBrainz Album Artist Id"], "64af8439-3319-4ad5-847c-79f828603427")
+        self.assertEqual(ids["MusicBrainz Release Group Id"], "b2c1c411")
+        self.assertEqual(sons._ids_musicbrainz({"mbid": "", "rg": ""}), {})
+
+
+class EtiquettesMusicBrainzTest(unittest.TestCase):
+    def test_m4a_lu_par_ffprobe_comme_par_emby(self):
+        import json
+        import subprocess
+        f = Path(tempfile.mkdtemp()) / "a.m4a"
+        _faire_audio(f)
+        sons.etiqueter_ids(f, {"MusicBrainz Artist Id": "64af8439-3319-4ad5-847c-79f828603427"}, "Rainbow (레인보우)")
+        tags = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", str(f)], capture_output=True, text=True).stdout)["format"]["tags"]
+        self.assertEqual(tags["artist"], "Rainbow (레인보우)")
+        self.assertEqual(tags["album_artist"], "Rainbow (레인보우)")
+        self.assertEqual(tags["MusicBrainz Artist Id"], "64af8439-3319-4ad5-847c-79f828603427")
+
+    def test_mp3(self):
+        import json
+        import subprocess
+        f = Path(tempfile.mkdtemp()) / "a.mp3"
+        _faire_audio(f)
+        sons.etiqueter_ids(f, {"MusicBrainz Artist Id": "64af8439-3319-4ad5-847c-79f828603427"}, "Rainbow (레인보우)")
+        sons.etiqueter_ids(f, {"MusicBrainz Artist Id": "64af8439-3319-4ad5-847c-79f828603427"})            # rejouable sans doubler
+        tags = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json", str(f)], capture_output=True, text=True).stdout)["format"]["tags"]
+        self.assertEqual(tags["artist"], "Rainbow (레인보우)")
+        self.assertEqual(tags["MusicBrainz Artist Id"], "64af8439-3319-4ad5-847c-79f828603427")
+
+
 if __name__ == "__main__":
     unittest.main()
