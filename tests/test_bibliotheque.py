@@ -71,6 +71,26 @@ class ListeTest(Base):
         self.assertEqual(len(gs), 1)
         self.assertTrue(gs[0]["clips"] and gs[0]["musique"])
 
+    def test_un_artist_nfo_a_deux_fiches_prend_celle_du_dossier(self):
+        # un ancien outil a collé une autre fiche DEVANT la vraie (Marina Kaye / Marina del Ray, Lucky J / Lucenzo)
+        d = self.clips / "Lucky J (럭키제이)"
+        d.mkdir()
+        (d / "artist.nfo").write_text(f'<?xml version="1.0"?>\n<artist>\n<name>Lucenzo</name>\n<musicBrainzArtistID>{UK}</musicBrainzArtistID>\n</artist>\n'
+                                      f'<artist>\n<name>Lucky J (럭키제이)</name>\n<musicBrainzArtistID>{KR}</musicBrainzArtistID>\n</artist>', encoding="utf-8")
+        self.assertEqual(bibliotheque.lister()[0]["mbid"], KR)
+
+    def test_deux_fiches_dont_aucune_ne_porte_le_nom_du_dossier_prennent_la_premiere(self):
+        d = self.clips / "Dossier"
+        d.mkdir()
+        (d / "artist.nfo").write_text(f"<artist><name>A</name><musicBrainzArtistID>{UK}</musicBrainzArtistID></artist><artist><name>B</name><musicBrainzArtistID>{KR}</musicBrainzArtistID></artist>", encoding="utf-8")
+        self.assertEqual(bibliotheque.lister()[0]["mbid"], UK)
+
+    def test_un_nfo_sans_balise_artist_se_lit_comme_avant(self):
+        d = self.clips / "Vieux"
+        d.mkdir()
+        (d / "artist.nfo").write_text(f"<musicBrainzArtistID>{KR}</musicBrainzArtistID>", encoding="utf-8")
+        self.assertEqual(bibliotheque.lister()[0]["mbid"], KR)
+
     def test_plusieurs_groupes_de_meme_nom_le_dossier_au_nom_exact_choisit(self):
         nfo(self.musique / "LiSA", UK, "LiSA")
         nfo(self.musique / "LISA (Blackpink)", KR, "LISA")

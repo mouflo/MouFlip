@@ -66,12 +66,28 @@ def identifier(cle_nom: str, mbid: str):
 
 
 # ---------------------------------------------------------------- les groupes
+_BLOC = re.compile(r"<artist>(.*?)</artist>", re.S | re.I)
+_NOM = re.compile(r"<name>\s*([^<]*?)\s*</name>", re.I)
+
+
 def _mbid_nfo(dossier: Path) -> str:
+    """L'identifiant MusicBrainz du groupe d'après son artist.nfo. Un ancien outil a parfois collé UNE AUTRE fiche devant la vraie (Marina Kaye / « Marina del
+    Ray », Rainbow / « One-T + Cool-T », Lucky J / « Lucenzo ») : avec plusieurs fiches, on prend celle dont le nom est celui du dossier, sinon la première."""
     try:
-        m = _MBID.search((dossier / "artist.nfo").read_text(encoding="utf-8-sig", errors="ignore"))
-        return m.group(1).lower() if m else ""
+        texte = (dossier / "artist.nfo").read_text(encoding="utf-8-sig", errors="ignore")
     except OSError:
         return ""
+    voulu = noms.normaliser(dossier.name)
+    trouves = []
+    for bloc in _BLOC.findall(texte):
+        m = _MBID.search(bloc)
+        if m:
+            nom = _NOM.search(bloc)
+            trouves.append((noms.normaliser(nom.group(1)) if nom else "", m.group(1).lower()))
+    if not trouves:
+        m = _MBID.search(texte)
+        return m.group(1).lower() if m else ""
+    return next((mbid for nom, mbid in trouves if nom and nom == voulu), trouves[0][1])
 
 
 def _sous_dossiers(racine) -> list:
