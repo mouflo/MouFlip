@@ -116,7 +116,10 @@ def executer(lignes: list[dict], sauvegarde=None) -> dict:
                 if chemin.exists():                                        # remplacement voulu : sauvegarde d'abord, la nouvelle est déjà entièrement en main
                     dossier_sauv = Path(sauvegarde) / time.strftime("%Y-%m-%d_%H%M%S")
                     dossier_sauv.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(chemin, dossier_sauv / f"{chemin.parent.name} - {chemin.name}")
+                    copie, n = dossier_sauv / f"{chemin.parent.name} - {chemin.name}", 2
+                    while copie.exists():                                  # même nom dans la même seconde (dossier des clips et de la musique) : jamais d'écrasement
+                        copie, n = dossier_sauv / f"{chemin.parent.name} - {n} - {chemin.name}", n + 1
+                    shutil.copyfile(chemin, copie)
                     chemin.write_bytes(contenu)
                     faits.append(f"{chemin.name} remplacée (l'ancienne est dans {dossier_sauv})")
                     continue

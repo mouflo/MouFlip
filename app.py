@@ -22,7 +22,7 @@ from src.config import load_config, load_secrets_env
 BASE_DIR = Path(__file__).resolve().parent
 load_secrets_env()
 
-from src import playlists, sons, audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
+from src import bibliotheque, playlists, sons, audio, chaines, convention, emby_artistes, existants, formats, images_perso, noms, sources, telechargement, travaux, ytcookies
 from src.emby_client import EmbyClient
 from src.netfix import repair_urllib3
 
@@ -803,6 +803,83 @@ def api_travaux_poster(tid, pid):
     return send_file(chemin, mimetype="image/jpeg", max_age=60)
 
 
+# ---- 📚 Ma bibliothèque : les groupes déjà rangés (clips et musique), leurs images -------------------------------------------------------------------------
+@app.route("/api/bibliotheque")
+def api_bibliotheque():
+    return jsonify({"groupes": [bibliotheque.resume(g) for g in bibliotheque.lister()], "racines": {"clips": Path(DOSSIER_CLIPS).is_dir(), "musique": Path(_racine_musique()).is_dir()}})
+
+
+def _groupe_biblio(id_):
+    g = bibliotheque.groupe(id_) if re.fullmatch(r"[0-9a-f]{12}", id_) else None
+    return g
+
+
+@app.route("/api/bibliotheque/<id_>")
+def api_bibliotheque_fiche(id_):
+    g = _groupe_biblio(id_)
+    return (jsonify(bibliotheque.fiche(g)), 200) if g else (jsonify({"error": "Groupe introuvable."}), 404)
+
+
+@app.route("/api/bibliotheque/<id_>/fichier")
+def api_bibliotheque_fichier(id_):
+    """Montre une image DÉJÀ rangée du groupe (liste blanche de noms : folder.jpg, banner.jpg, logo.png, fonds, pochette et cdart des albums)."""
+    from flask import send_file
+    g = _groupe_biblio(id_)
+    p = bibliotheque.chemin_image(g, request.args.get("d", ""), request.args.get("f", "")) if g else None
+    if not p:
+        return jsonify({"error": "Image introuvable."}), 404
+    return send_file(p, max_age=0)
+
+
+@app.route("/api/bibliotheque/<id_>/appliquer", methods=["POST"])
+def api_bibliotheque_appliquer(id_):
+    g = _groupe_biblio(id_)
+    if not g:
+        return jsonify({"error": "Groupe introuvable."}), 404
+    r = bibliotheque.appliquer(g, request.get_json(silent=True) or {})
+    return (jsonify(r), 200) if r.get("ok") else (jsonify(r | {"error": r.get("error") or " ; ".join(r.get("erreurs", [])) or "Rien n'a été modifié."}), 400)
+
+
+@app.route("/api/bibliotheque/<id_>/image", methods=["POST"])
+def api_bibliotheque_image(id_):
+    """Ajoute à la main une image pour ce groupe (fichier envoyé ou adresse) : elle devient une proposition « toi » ; la fiche mise à jour est renvoyée."""
+    g = _groupe_biblio(id_)
+    if not g:
+        return jsonify({"error": "Groupe introuvable."}), 404
+    if not g["mbid"]:
+        return jsonify({"error": "Identifie d'abord le groupe : ses images ajoutées sont rangées sous son identifiant."}), 400
+    type_ = str(request.form.get("type", ""))
+    album = str(request.form.get("album", ""))
+    envoye = request.files.get("fichier")
+    try:
+        if envoye and envoye.filename:
+            octets, nom = envoye.read(images_perso.MAX_OCTETS + 1), envoye.filename
+        elif request.form.get("lien", "").strip():
+            octets, nom = images_perso.telecharger(request.form["lien"])
+        else:
+            return jsonify({"error": "Choisis un fichier ou colle l'adresse d'une image."}), 400
+        if type_ not in images_perso.TYPES:
+            return jsonify({"error": "Type d'image inconnu."}), 400
+        images_perso.ajouter(g["mbid"], type_, octets, nom, noms.normaliser(album) if type_ in ("couverture", "cdart") else "")
+    except images_perso.ImageError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(bibliotheque.fiche(g))
+
+
+@app.route("/api/bibliotheque/<id_>/identifier", methods=["POST"])
+def api_bibliotheque_identifier(id_):
+    """« Ce dossier, c'est ce groupe » (pour un groupe sans artist.nfo) : retenu pour les prochaines ouvertures."""
+    g = _groupe_biblio(id_)
+    if not g:
+        return jsonify({"error": "Groupe introuvable."}), 404
+    try:
+        bibliotheque.identifier(g["nom_norm"], str((request.get_json(silent=True) or {}).get("mbid", "")))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    g = _groupe_biblio(id_) or next((x for x in bibliotheque.lister() if x["nom_norm"] == g["nom_norm"]), None)
+    return jsonify(bibliotheque.fiche(g)) if g else jsonify({"ok": True})
+
+
 @app.route("/api/existant")
 def api_existant():
     """Montre une image DÉJÀ présente dans « Video clip » (pour la comparer aux propositions). Seulement un .jpg/.png situé sous le dossier des clips."""
@@ -1257,6 +1334,9 @@ redemarrage.init_app(app, BASE_DIR)
 import redemarrer
 redemarrer.init_app(app, lambda: (["lecture des formats YouTube"] if any(not j["fini"] for j in FORMATS.values()) else []) + travaux.occupe() + sons.occupe())
 images_perso.configurer(BASE_DIR / "data")
+(BASE_DIR / "data" / "bibliotheque").mkdir(parents=True, exist_ok=True)
+bibliotheque.configurer(BASE_DIR / "data" / "bibliotheque", lambda: DOSSIER_CLIPS, lambda: _racine_musique(), EMBY, lambda mbid: _groupe_complet(mbid),
+                        lambda rg, groupe, album: travaux.couvertures_fn(rg, groupe, album) if travaux.couvertures_fn else [])
 travaux.emby_artiste_fn = lambda nom: emby_artistes.chercher(EMBY, nom)
 travaux.apres_rangement_fn = lambda c: _son_apres_clip(c)
 sons.configurer(BASE_DIR / "data", lambda: _racine_musique(), lambda: DOSSIER_CLIPS, _reglage_son, lambda: AUDIO["cible_db"], EMBY, sources.piste_dans_album, ecriture=False)

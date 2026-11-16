@@ -1,0 +1,38 @@
+/* 📚 Ma bibliothèque : la fiche d'un groupe reprend le style de la fiche d'un clip (règles propres à #fiche recopiées pour #biblio) */
+#biblio { position:fixed; inset:0; z-index:100; background:var(--bg, #121315); overflow-y:auto; display:none; -webkit-overflow-scrolling:touch; }
+#biblio.ouvert { display:block; }
+#biblio .vign .src.toi { background:#4a3d1e; color:#fbefd0; }
+#biblio button.vign { background:#1b1d20 !important; color:#eceff3 !important; border:2px solid #3a3f45 !important; box-shadow:none !important; font-weight:400 !important; }
+#biblio button.vign:hover { border-color:#6b737c !important; }
+#biblio button.vign.sel { border-color:var(--accent) !important; background:#1d2a1f !important; }
+#biblio button.vign.fixe { opacity:.8; }
+#biblio button.vign small { display:block; padding:7px 8px 8px; font-size:.8rem; line-height:1.35; color:#eceff3 !important; background:transparent !important; }
+#biblio .vign .src { display:inline-block; padding:1px 8px; border-radius:10px; font-weight:700; font-size:.74rem; background:#27384d; color:#d3e6ff; }
+#biblio .vign .src.audiodb { background:#3d2b4f; color:#efdcff; }
+#biblio .vign .src.video { background:#2f3f2c; color:#d9f2d4; }
+#biblio .vign .actu { color:#a6e49f; font-weight:700; }
+#biblio .vign .remp { color:#f4c76e; font-weight:600; }
+#biblio .vign .dim { display:block; color:#aeb5bd; font-size:.72rem; margin-top:2px; }
+#biblio button.vign.aucune { color:#eceff3 !important; font-weight:600 !important; }
+#biblio .vign .coche { background:var(--accent); }
+#biblio { z-index: 100; }
+.fi-barre-biblio { position:fixed; left:0; right:0; bottom:0; z-index:110; background:var(--card); border-top:1px solid var(--line); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; }
+.fi-barre-biblio .resume { flex:1; min-width:0; font-size:.78rem; color:var(--muted); }
+.fi-barre-biblio .btn { padding:11px 14px; }
+@media (max-width:560px) { .fi-barre-biblio { flex-wrap:wrap; } .fi-barre-biblio .resume { flex:1 1 100%; } .fi-barre-biblio .btn { flex:1; } }
+.bib-haut { max-width:900px; margin:0 auto; padding:16px 14px 4px; }
+.bib-haut h2 { margin:0 0 4px; font-size:1.35rem; word-break:break-word; }
+.bib-grille { display:grid; grid-template-columns:repeat(auto-fill, minmax(128px, 1fr)); gap:12px; margin-top:10px; }
+button.bib-carte { display:flex; flex-direction:column; gap:6px; text-align:left; padding:8px; border-radius:10px; border:1px solid var(--line); background:var(--field); color:var(--text); cursor:pointer; font:inherit; min-width:0; }
+button.bib-carte:hover { border-color:var(--accent); }
+button.bib-carte img, .bib-sans { width:100%; aspect-ratio:1; object-fit:cover; border-radius:6px; background:#000; display:block; }
+.bib-sans { display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:.78rem; background:repeating-conic-gradient(#2c2c2c 0% 25%, #1d1d1d 0% 50%) 50% / 16px 16px; }
+button.bib-carte b { font-size:.88rem; line-height:1.25; word-break:break-word; }
+.bib-pills { display:flex; flex-wrap:wrap; gap:4px; }
+.bib-pills i { font-style:normal; font-size:.68rem; padding:1px 7px; border-radius:10px; background:var(--card); color:var(--muted); }
+.bib-pills i.a-id { background:rgba(230,170,50,.18); color:#e6c068; }
+details.bib-album { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin:8px 0; }
+details.bib-album summary { cursor:pointer; font-weight:600; }
+.bib-fichiers { margin:8px 0; font-size:.82rem; } .bib-fichiers ul { margin:4px 0 0 18px; padding:0; color:var(--muted); word-break:break-all; }
+@media (max-width:600px) { .bib-grille { grid-template-columns:repeat(3, 1fr); gap:8px; } }
+#biblio .btn { min-height:44px; }

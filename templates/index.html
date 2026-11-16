@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="/ui/mou-ui.css?v={{ version|urlencode }}">
 <script src="/ui/mou-ui.js?v={{ version|urlencode }}" defer></script>
 <link rel="stylesheet" href="/ui/apparence.css?v={{ version|urlencode }}">
+<link rel="stylesheet" href="/ui/bibliotheque.css?v={{ version|urlencode }}">
 <script src="/ui/apparence.js?v={{ version|urlencode }}" defer></script>
 <style>
     body { padding:16px; }
@@ -180,7 +181,23 @@
         <div id="plMsg"></div><div id="plListe"></div>
     </details>
 
+    <details class="panel" id="biblioPanel">
+        <summary style="cursor:pointer;font-weight:600">📚 Ma bibliothèque : mes clips et mes morceaux déjà rangés</summary>
+        <div class="muted" style="margin:8px 0">Tous les groupes de « Video clip » et de « Musique », avec leur poster actuel. Ouvre un groupe pour changer ses images (poster, bannière, logo, fonds d'écran, pochette et cdart de chaque album) sans passer par Emby. Chaque image remplacée est sauvegardée.</div>
+        <div class="recherche"><input type="text" id="biblioQ" placeholder="Chercher un groupe…" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn ghost" id="biblioActualiser" type="button">🔄</button></div>
+        <div class="muted" id="biblioCompte"></div>
+        <div id="biblioMsg"></div>
+        <div id="biblioListe" class="bib-grille"></div>
+    </details>
+
     <div id="groupe" hidden></div>
+
+    <div id="biblio" role="dialog" aria-modal="true" aria-label="Fiche d'un groupe de la bibliothèque">
+        <div id="biblioCorps"></div>
+        <div class="fi-msg" id="biblioNote" hidden></div>
+        <input type="file" id="biblioFichierImg" accept="image/*" hidden>
+        <div class="fi-barre-biblio"><div class="resume" id="biblioResume"></div><button class="btn ghost" id="biblioFermer" type="button">Fermer</button><button class="btn" id="biblioAppliquer" type="button" disabled>💾 Appliquer</button></div>
+    </div>
 
     <div id="fiche" role="dialog" aria-modal="true" aria-label="Fiche du clip">
         <div id="ficheCorps"></div>
@@ -896,5 +913,6 @@ $('chercher').addEventListener('click', chercher);
 $('q').addEventListener('keydown', e => { if (e.key === 'Enter') chercher(); });
 suivreTravaux();
 </script>
+<script src="/ui/bibliotheque.js?v={{ version|urlencode }}" defer></script>
 </body>
 </html>
