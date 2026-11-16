@@ -2,9 +2,11 @@
 (« -S res,tbr »), vidéo + audio fusionnés en mkv SANS réencodage. L'audio AAC est préféré à l'Opus : AACGain règle son volume sans perte. Tout se passe dans un dossier de travail, jamais dans « Video clip »."""
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from src import ytcookies
@@ -143,6 +145,48 @@ def images_extraites(fichier_video, dossier, combien: int = 4) -> list[dict]:
 CRF_REDUCTION = {"leger": 30, "tres_peu_de_perte": 27, "plus_petit": 36}
 MEMOIRE_MIN_GO = 2.5
 
+# ---- Sur la carte graphique (Intel Iris Xe, VAAPI) : décodage et encodage VP9 matériels. Mesuré le 16/11/2026 sur 20 s de « FEARLESS » (LE SSERAFIM, 4K VP9,
+# 29 Mo) : processeur crf 30 = 69 s (0,3 × le temps réel), 50 % de la taille, SSIM 0,9947 ; carte, qualité constante : q 90 = 5,6 s, 60 %, SSIM 0,9939 ;
+# q 125 = 6,1 s, 37 %, SSIM 0,9921 ; q 160 = 6,2 s, 23 %, SSIM 0,9886. Soit environ 12 fois plus vite, pour une qualité à peine plus faible à taille égale.
+# (Pièges : « -global_quality » ne vaut que sous « -rc_mode CQP » ; en mode auto ou ICQ, la carte sort un fichier de 6 % de la taille, SSIM 0,968.)
+RENDER = "/dev/dri/renderD128"
+MOTEUR = "auto"                      # « auto » : la carte quand elle marche, sinon le processeur ; « cpu » : toujours le processeur (le plus compact)
+_GPU = {"vu": 0.0, "ok": False}
+
+
+def qualite_carte(crf: int) -> int:
+    """Niveau de qualité de la carte (0-255, plus petit = plus fidèle) donnant la taille du crf libvpx demandé : crf 27 → 90, 30 → 102, 36 → 125."""
+    return max(40, min(200, round(90 + 3.9 * (int(crf) - 27))))
+
+
+def _env_gpu() -> dict:
+    env = dict(os.environ)
+    if Path("/usr/lib/x86_64-linux-gnu/dri/iHD_drv_video.so").exists():
+        env.setdefault("LIBVA_DRIVER_NAME", "iHD")             # le pilote des cartes Intel récentes (Iris Xe, Arc)
+    return env
+
+
+def gpu_disponible(force: bool = False) -> bool:
+    """La carte sait-elle encoder en VP9 ? (/dev/dri/renderD128 vu par le conteneur, et un vrai essai de 2 images ; gardé 10 minutes.)"""
+    if not force and time.time() - _GPU["vu"] < 600:
+        return _GPU["ok"]
+    ok = False
+    if Path(RENDER).exists() and shutil.which("ffmpeg"):
+        try:
+            r = subprocess.run(["ffmpeg", "-v", "error", "-init_hw_device", f"vaapi=va:{RENDER}", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.2",
+                                "-vf", "format=nv12,hwupload", "-c:v", "vp9_vaapi", "-frames:v", "2", "-f", "null", "-"],
+                               capture_output=True, text=True, timeout=30, env=_env_gpu())
+            ok = r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+    _GPU.update(vu=time.time(), ok=ok)
+    return ok
+
+
+def moteur_prevu() -> str:
+    """« carte graphique » ou « processeur » : ce que la réduction utilisera maintenant."""
+    return "carte graphique" if MOTEUR != "cpu" and gpu_disponible() else "processeur"
+
 
 def memoire_disponible_go() -> float:
     try:
@@ -155,7 +199,8 @@ def memoire_disponible_go() -> float:
 
 
 def reduire(source, dst, crf: int = 30, progression=None) -> dict:
-    """Écrit dst (mkv) = image de `source` réencodée en VP9 (crf donné) + son recopié. Retourne {fait, raison, avant, apres, crf}.
+    """Écrit dst (mkv) = image de `source` réencodée en VP9 (crf donné) + son recopié, sur la carte graphique quand elle marche (12 fois plus vite), sinon sur le processeur.
+    Retourne {fait, raison, avant, apres, crf, moteur}.
     Ne réencode PAS : un clip déjà en AV1 (déjà compact), un manque de mémoire, un résultat qui n'est pas au moins 10 % plus petit (dst n'est alors pas
     créé et `source` reste le fichier à utiliser). Lève TelechargementError si ffmpeg échoue. `progression(pourcent)` est appelé pendant le travail."""
     source, dst = Path(source), Path(dst)
@@ -164,31 +209,51 @@ def reduire(source, dst, crf: int = 30, progression=None) -> dict:
     codec = (info["video"].get("codec") or "").lower()
     if codec == "av1":
         return {"fait": False, "raison": "déjà en AV1 (déjà compact)", "avant": avant, "apres": avant, "crf": crf}
-    if memoire_disponible_go() < MEMOIRE_MIN_GO:
+    if (MOTEUR == "cpu" or not gpu_disponible()) and memoire_disponible_go() < MEMOIRE_MIN_GO:       # la carte, elle, n'a presque pas besoin de mémoire
         return {"fait": False, "raison": f"pas assez de mémoire libre ({memoire_disponible_go():.1f} Go, il en faut {MEMOIRE_MIN_GO})", "avant": avant, "apres": avant, "crf": crf}
     duree = float(info.get("duree") or 0)
-    cmd = ["nice", "-n", "10", "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
-           "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", str(int(crf)), "-row-mt", "1", "-cpu-used", "3", "-threads", "8", "-tile-columns", "2", "-g", "240",
-           "-pix_fmt", "yuv420p", "-c:a", "copy", str(dst)]
-    try:
-        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as proc:
-            for ligne in proc.stdout:
-                if progression and duree and ligne.startswith("out_time_us="):
-                    try:
-                        progression(min(99, int(100 * int(ligne.split("=")[1]) / 1e6 / duree)))
-                    except ValueError:
-                        pass
-            erreur = proc.stderr.read() or ""
-            proc.wait(timeout=3600)
-        if proc.returncode != 0:
-            raise TelechargementError("ffmpeg a échoué : " + erreur[-300:].replace("\n", " "))
-    except (OSError, subprocess.SubprocessError) as e:
-        raise TelechargementError(f"réduction de la taille impossible : {e}")
+    essais = []                                                          # (moteur, commande) : le premier qui réussit gagne
+    if MOTEUR != "cpu" and gpu_disponible():
+        qp, entree = str(qualite_carte(crf)), ["ffmpeg", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1"]
+        sortie = ["-map", "0:v:0", "-map", "0:a:0?"]
+        fin_cmd = ["-c:v", "vp9_vaapi", "-rc_mode", "CQP", "-global_quality", qp, "-g", "240", "-c:a", "copy", str(dst)]
+        essais.append(("carte graphique", entree + ["-hwaccel", "vaapi", "-hwaccel_device", RENDER, "-hwaccel_output_format", "vaapi", "-i", str(source)]
+                       + sortie + ["-vf", "scale_vaapi=format=nv12"] + fin_cmd))
+        essais.append(("carte graphique (image décodée par le processeur)", entree + ["-init_hw_device", f"vaapi=va:{RENDER}", "-filter_hw_device", "va", "-i", str(source)]
+                       + sortie + ["-vf", "format=nv12,hwupload"] + fin_cmd))
+    essais.append(("processeur", ["nice", "-n", "10", "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-i", str(source), "-map", "0:v:0", "-map", "0:a:0?",
+                                  "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", str(int(crf)), "-row-mt", "1", "-cpu-used", "3", "-threads", "8", "-tile-columns", "2", "-g", "240",
+                                  "-pix_fmt", "yuv420p", "-c:a", "copy", str(dst)]))
+    moteur, erreur = "", ""
+    for nom, cmd in essais:
+        if nom == "processeur" and memoire_disponible_go() < MEMOIRE_MIN_GO:     # le processeur seul demande de la mémoire ; la carte, presque pas
+            return {"fait": False, "raison": f"pas assez de mémoire libre ({memoire_disponible_go():.1f} Go, il en faut {MEMOIRE_MIN_GO})", "avant": avant, "apres": avant, "crf": crf}
+        if dst.exists():
+            dst.unlink()
+        try:
+            with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_env_gpu() if nom != "processeur" else None) as proc:
+                for ligne in proc.stdout:
+                    if progression and duree and ligne.startswith("out_time_us="):
+                        try:
+                            progression(min(99, int(100 * int(ligne.split("=")[1]) / 1e6 / duree)))
+                        except ValueError:
+                            pass
+                erreur = proc.stderr.read() or ""
+                proc.wait(timeout=3600)
+            if proc.returncode == 0:
+                moteur = nom
+                break
+        except (OSError, subprocess.SubprocessError) as e:
+            erreur = str(e)
+        if nom != "processeur":
+            _GPU["vu"] = 0.0                                             # la carte a refusé ce clip : on la reteste la prochaine fois, le suivant essai prend le relais
+    else:
+        raise TelechargementError("ffmpeg a échoué : " + erreur[-300:].replace("\n", " "))
     apres = dst.stat().st_size if dst.exists() else avant
     if apres > avant * 0.9:
         try:
             dst.unlink()
         except OSError:
             pass
-        return {"fait": False, "raison": f"gain trop faible ({apres / avant:.0%} de l'original) : fichier d'origine gardé", "avant": avant, "apres": avant, "crf": crf}
-    return {"fait": True, "raison": "", "avant": avant, "apres": apres, "crf": crf}
+        return {"fait": False, "raison": f"gain trop faible ({apres / avant:.0%} de l'original) : fichier d'origine gardé", "avant": avant, "apres": avant, "crf": crf, "moteur": moteur}
+    return {"fait": True, "raison": "", "avant": avant, "apres": apres, "crf": crf, "moteur": moteur}

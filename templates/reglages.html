@@ -78,6 +78,10 @@
             <option value="30">Équilibré : environ 60 % de la taille (conseillé)</option>
             <option value="36">Plus petit : environ 40 % de la taille (détails un peu moins fins)</option></select></div>
         <div class="sub">Un clip déjà en AV1 n'est pas réencodé, et si le gain est inférieur à 10 % le fichier d'origine est gardé.</div>
+        <div class="field" style="max-width:420px"><label for="redMoteur">Moteur</label><select id="redMoteur">
+            <option value="auto">Carte graphique si elle est là (environ 12 fois plus rapide)</option>
+            <option value="cpu">Processeur (un peu plus compact, environ 10 minutes par clip)</option></select></div>
+        <div id="redGpu" class="note" style="margin:4px 0 10px"></div>
         <div class="row"><button class="btn" id="redSave">Enregistrer</button></div>
         <div id="redMsg"></div>
     </div>
@@ -138,11 +142,11 @@ async function loadAll() {
     const d = await api('/api/settings/dossier'); $('clipsDir').value = d.dossier || '';
     $('clipsState').textContent = d.ok ? '✅ Dossier accessible' : '⚠️ Dossier introuvable (le partage est-il monté ?)';
     const au = await api('/api/settings/audio'); $('dbValue').value = au.cible_db; $('dbDebit').value = au.debit; $('dbSansPerte').checked = au.sans_perte; $('dbAacgain').textContent = au.aacgain ? '✅ AACGain est installé.' : '⚠️ AACGain est absent : lance « bash /opt/mouflip/install-aacgain.sh » ; en attendant, le son est refait.';
-    const rd = await api('/api/settings/reduction'); $('redActif').checked = rd.actif; $('redNiveau').value = String([27, 30, 36].includes(rd.crf) ? rd.crf : 30);
+    const rd = await api('/api/settings/reduction'); $('redActif').checked = rd.actif; $('redNiveau').value = String([27, 30, 36].includes(rd.crf) ? rd.crf : 30); $('redMoteur').value = rd.moteur === 'cpu' ? 'cpu' : 'auto'; $('redGpu').textContent = rd.gpu ? '✅ La carte graphique Intel est visible : elle sera utilisée.' : '⚠ La carte graphique n\'est pas visible par cette appli : le processeur sera utilisé.';
     const fa = await api('/api/settings/fanart'); $('faState').textContent = fa.configured ? 'Clé enregistrée (' + fa.hint + ')' : 'Aucune clé : seules les images de TheAudioDB sont utilisées.';
     loadCk(); loadOutils();
 }
-$('redSave').addEventListener('click', async () => { const r = await post('/api/settings/reduction', {actif: $('redActif').checked, crf: Number($('redNiveau').value)}); say('redMsg', r.message || r.error, r.ok); });
+$('redSave').addEventListener('click', async () => { const r = await post('/api/settings/reduction', {actif: $('redActif').checked, crf: Number($('redNiveau').value), moteur: $('redMoteur').value}); say('redMsg', r.message || r.error, r.ok); });
 $('faTest').addEventListener('click', async () => { const r = await post('/api/settings/fanart', {api_key: $('faKey').value, test: true}); say('faMsg', r.message || r.error, r.ok); });
 $('faSave').addEventListener('click', async () => { const r = await post('/api/settings/fanart', {api_key: $('faKey').value}); say('faMsg', r.message || r.error, r.ok); if (r.ok) { $('faKey').value = ''; loadAll(); } });
 (async () => { const sn = await api('/api/settings/son'); $('sonFormat').value = sn.format; $('sonDebitMp3').value = sn.debit_mp3; $('sonDebitM4a').value = sn.debit_m4a; $('sonDossier').value = sn.dossier || ''; $('sonAuto').checked = !!sn.auto;

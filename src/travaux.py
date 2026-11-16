@@ -323,9 +323,10 @@ def _preparer(c):
         reduction = {}
         veut, crf = reduction_voulue(c)
         if veut:
-            _maj(c, etat="reduction", progres=0, message="Réduction de la taille du clip (environ 10 minutes)…")
+            duree_txt = "environ 1 minute, sur la carte graphique" if telechargement.moteur_prevu() == "carte graphique" else "environ 10 minutes, sur le processeur"
+            _maj(c, etat="reduction", progres=0, message=f"Réduction de la taille du clip ({duree_txt})…")
             def avance(pct):
-                c["progres"], c["message"] = pct, f"Réduction de la taille du clip… {pct} % (environ 10 minutes)"
+                c["progres"], c["message"] = pct, f"Réduction de la taille du clip… {pct} % ({duree_txt})"
             reduit = dossier / "reduit.mkv"
             reduction = telechargement.reduire(source, reduit, crf, avance)
             if reduction["fait"]:
@@ -348,7 +349,7 @@ def _preparer(c):
         _maj(c, fichier=str(fini), poster=poster, posters=posters, sonde=sonde, reduction=reduction, audio=a, titre_youtube=t["titre"], chaine=t["chaine"])
         c["plan"] = [{k: v for k, v in l.items() if k not in ("contenu",)} for l in construire_plan(c)]
         v = sonde["video"]
-        taille_txt = (f" (taille {reduction['avant'] / 1e6:.0f} → {reduction['apres'] / 1e6:.0f} Mo)" if reduction.get("fait") else
+        taille_txt = (f" (taille {reduction['avant'] / 1e6:.0f} → {reduction['apres'] / 1e6:.0f} Mo, {reduction.get('moteur', 'processeur')})" if reduction.get("fait") else
                       (f" (taille non réduite : {reduction['raison']})" if reduction else ""))
         msg = f"Prêt à ranger : {v['hauteur']}p {v['codec']}{taille_txt}, volume {a['avant']} → {a['apres']} dB ({a.get('methode', '')})" + (", limiteur actif" if a["limiteur"] else "") + "."
         _maj(c, etat="pret", progres=100, message=msg)

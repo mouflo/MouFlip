@@ -73,7 +73,9 @@ OUTILS_ETAT = {}
 
 
 REDUCTION = {"actif": bool(((CONFIG.get("clips") or {}).get("reduction") or {}).get("actif", False)),
-             "crf": int(((CONFIG.get("clips") or {}).get("reduction") or {}).get("crf", 30))}
+             "crf": int(((CONFIG.get("clips") or {}).get("reduction") or {}).get("crf", 30)),
+             "moteur": "cpu" if (((CONFIG.get("clips") or {}).get("reduction") or {}).get("moteur")) == "cpu" else "auto"}
+telechargement.MOTEUR = REDUCTION["moteur"]
 
 
 def _roots():
@@ -1104,7 +1106,7 @@ def api_choix_reduction():
 def api_reduction():
     """Réduire la taille des clips : l'image est réencodée en VP9 (qualité constante, 8 images/s environ), le son est recopié. Désactivé par défaut."""
     if request.method == "GET":
-        return jsonify({**REDUCTION, "choix": telechargement.CRF_REDUCTION})
+        return jsonify({**REDUCTION, "choix": telechargement.CRF_REDUCTION, "gpu": telechargement.gpu_disponible(), "moteur_prevu": telechargement.moteur_prevu()})
     b = request.get_json(silent=True) or {}
     try:
         crf = int(b.get("crf", REDUCTION["crf"]))
@@ -1113,18 +1115,21 @@ def api_reduction():
     if not 20 <= crf <= 45:
         return jsonify({"ok": False, "error": "Le niveau doit être entre 20 (très fidèle, gros fichier) et 45 (petit fichier)."}), 400
     actif = bool(b.get("actif"))
+    moteur = "cpu" if b.get("moteur") == "cpu" else "auto"
     import json
     chemin = BASE_DIR / "config.json"
     try:
         cfg = json.loads(chemin.read_text(encoding="utf-8")) if chemin.exists() else {}
     except ValueError:
         return jsonify({"ok": False, "error": "config.json est illisible : rien n'a été modifié."}), 500
-    cfg.setdefault("clips", {})["reduction"] = {"actif": actif, "crf": crf}
+    cfg.setdefault("clips", {})["reduction"] = {"actif": actif, "crf": crf, "moteur": moteur}
     tmp = chemin.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, chemin)
-    REDUCTION.update(actif=actif, crf=crf)
-    return jsonify({"ok": True, "message": ("Enregistré : les prochains clips auront leur taille réduite (environ 10 minutes de plus par clip)." if actif
+    REDUCTION.update(actif=actif, crf=crf, moteur=moteur)
+    telechargement.MOTEUR = moteur
+    duree = "environ 1 minute de plus par clip" if telechargement.moteur_prevu() == "carte graphique" else "environ 10 minutes de plus par clip"
+    return jsonify({"ok": True, "message": (f"Enregistré : les prochains clips auront leur taille réduite ({duree}, sur le {telechargement.moteur_prevu()})." if actif
                                               else "Enregistré : la taille des clips n'est pas réduite (le fichier de YouTube est gardé tel quel).")})
 
 

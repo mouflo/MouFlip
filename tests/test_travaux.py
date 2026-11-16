@@ -1045,12 +1045,45 @@ class ReductionTest(unittest.TestCase):
         self.assertEqual((r["fait"], r["raison"]), (False, "déjà en AV1 (déjà compact)"))
         self.assertFalse((self.tmp / "r.mkv").exists())
 
-    def test_pas_assez_de_memoire_pas_de_reencodage(self):
+    def test_pas_assez_de_memoire_pas_de_reencodage_sur_le_processeur(self):
         src = self._source(args=("-crf", "10"))
-        with mock.patch.object(telechargement, "memoire_disponible_go", return_value=1.0):
+        with mock.patch.object(telechargement, "memoire_disponible_go", return_value=1.0), mock.patch.object(telechargement, "MOTEUR", "cpu"):
             r = telechargement.reduire(src, self.tmp / "r.mkv", 30)
         self.assertFalse(r["fait"])
         self.assertIn("mémoire", r["raison"])
+
+    def test_la_qualite_de_la_carte_suit_le_crf(self):
+        self.assertEqual([telechargement.qualite_carte(c) for c in (27, 30, 36)], [90, 102, 125])      # mesuré le 16/11/2026 : même taille que le crf libvpx
+        self.assertEqual((telechargement.qualite_carte(0), telechargement.qualite_carte(99)), (40, 200))   # borné
+
+    def test_moteur_processeur_force(self):
+        src = self._source(args=("-crf", "10"))
+        with mock.patch.object(telechargement, "MOTEUR", "cpu"):
+            self.assertEqual(telechargement.moteur_prevu(), "processeur")
+            r = telechargement.reduire(src, self.tmp / "r.mkv", 30)
+        self.assertTrue(r["fait"], r)
+        self.assertEqual(r["moteur"], "processeur")
+
+    @unittest.skipUnless(telechargement.gpu_disponible(force=True), "pas de carte graphique visible par ce conteneur")
+    def test_moteur_carte_graphique(self):
+        src = self._source(args=("-crf", "10"))
+        with mock.patch.object(telechargement, "MOTEUR", "auto"), mock.patch.object(telechargement, "memoire_disponible_go", return_value=0.5):
+            self.assertEqual(telechargement.moteur_prevu(), "carte graphique")
+            r = telechargement.reduire(src, self.tmp / "r.mkv", 30)               # la carte n'a pas besoin de mémoire : pas de refus
+        self.assertTrue(r["fait"], r)
+        self.assertEqual(r["moteur"], "carte graphique")
+        s = telechargement.sonder(self.tmp / "r.mkv")
+        self.assertEqual((s["video"]["codec"], s["audio"]["codec"], s["video"]["hauteur"]), ("vp9", "aac", 360))
+        self.assertEqual(audio.codec_audio(src), audio.codec_audio(self.tmp / "r.mkv"))
+
+    def test_la_carte_refuse_le_clip_le_processeur_prend_le_relais(self):
+        src = self._source(args=("-crf", "10"))
+        with mock.patch.object(telechargement, "MOTEUR", "auto"), mock.patch.object(telechargement, "gpu_disponible", return_value=True), \
+                mock.patch.object(telechargement, "RENDER", "/dev/dri/n-existe-pas"):                        # les deux essais sur la carte échouent
+            r = telechargement.reduire(src, self.tmp / "r.mkv", 30)
+        self.assertTrue(r["fait"], r)
+        self.assertEqual(r["moteur"], "processeur")
+        self.assertTrue(src.exists())
 
     def test_choix_par_clip_defaut_non_ou_un_niveau(self):
         travaux.configurer(self.tmp / "data", lambda: "/x", lambda: 89.0, lambda: "192k", mock.Mock(configured=True), lambda: True, lambda: {"actif": True, "crf": 30})
